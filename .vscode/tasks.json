@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "generate: all",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "generate",
+        "${workspaceFolder}/..."
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "TMPDIR": "",
+          "GOEXPERIMENT": "greenteagc",
+        },
+      },
+      "presentation": {
+        "reveal": "silent",
+        "clear": false,
+        "showReuseMessage": false,
+      },
+      "problemMatcher": [
+        "$go",
+      ]
+    },
+  ]
+}

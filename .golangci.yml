@@ -1,0 +1,230 @@
+# See the dedicated "version" documentation section.
+version: "2"
+linters:
+  default: all
+  disable:
+    - unparam
+    - depguard
+    - nonamedreturns
+    - varnamelen
+    - wrapcheck
+    - forbidigo
+    - gocritic
+    - wsl
+  enable:
+    - wsl_v5
+  settings:
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+  exclusions:
+    generated: strict
+    warn-unused: true
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      - linters:
+          - staticcheck
+        path: pkg/lang/internal/
+      - linters:
+          - mnd
+          - gomnd
+          - exhaustruct
+          - noinlineerr
+          - exhaustive
+          - nestif
+          - err113
+        path: pkg/lang/lang.go
+      - linters:
+          - structtag
+        source: "`(cmd|arg)`"
+      - linters:
+          - gocyclo
+          - errcheck
+          - dupl
+          - gosec
+        path: _test\.go
+      - linters:
+          - lll
+        source: "^//go:generate "
+      - linters: # Disable global var warnings for idents prefixed "[dD]efault[…]".
+          - gochecknoglobals
+        source: "^(var|const)?\\s+([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)"
+      - linters:
+          - lll
+        path: cmd/envcomp/cli/
+      - linters:
+          - exhaustruct
+          - mnd
+          - gomnd
+        source: "slog\\.Attr\\{\\}|Syntax\\{|kong\\.HelpOptions\\{"
+      - linters:
+          - nilnil
+          - ireturn
+          - cyclop
+          - nilerr
+        path: cmd/envcomp/cli/resolver.go
+      - linters:
+          - goanalysis
+          - staticcheck
+          - unsafe
+        text: "SA1012"
+        path: pkg/log/log_test.go
+      - linters:
+          - markdownlint
+        path: grammar\.md
+      # Complex functions that are difficult to simplify
+      - linters:
+          - cyclop
+          - gocyclo
+          - gocognit
+          - funlen
+        path: pkg/lang/marshal\.go
+      - linters:
+          - cyclop
+          - gocyclo
+          - gocognit
+          - funlen
+        path: pkg/log/pretty\.go
+      - linters:
+          - cyclop
+          - funlen
+        path: pkg/log/config\.go
+      - linters:
+          - cyclop
+          - gocyclo
+          - gocognit
+          - funlen
+        path: cmd/envcomp/cli/log\.go
+      - linters:
+          - funlen
+        path: cmd/envcomp/cli/cli\.go
+      # Dynamic errors are acceptable for user-facing error messages
+      - linters:
+          - err113
+        path: pkg/error\.go
+      - linters:
+          - err113
+        path: cmd/envcomp/parser/parser\.go
+      # Inline error handling is idiomatic in certain contexts
+      - linters:
+          - noinlineerr
+        path: pkg/lang/marshal\.go
+      - linters:
+          - exhaustive
+        path: pkg/log/pretty\.go
+      # Parser type assertions are safe by design
+      - linters:
+          - forcetypeassert
+          - funcorder
+          - exhaustruct
+        path: cmd/envcomp/parser/parser\.go
+      # Global variables used for package-level state
+      - linters:
+          - gochecknoglobals
+          - revive
+          - gosec
+        path: pkg/pprof/pprof\.go
+      # Local go.mod replacements needed for development
+      - linters:
+          - gomoddirectives
+        path: go\.mod
+      # Magic number acceptable in marshal logic
+      - linters:
+          - mnd
+        path: pkg/lang/marshal\.go
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard # Standard section: captures all standard packages.
+        - default # Default section: contains all imports that could not be matched to another section type.
+        - prefix(github.com/ardnew) # Custom section: groups all imports with the specified Prefix.
+        - blank # Blank section: contains all blank imports. This section is not present unless explicitly enabled.
+        - dot # Dot section: contains all dot imports. This section is not present unless explicitly enabled.
+        - alias # Alias section: contains all alias imports. This section is not present unless explicitly enabled.
+        - localmodule # Local module section: contains all local packages. This section is not present unless explicitly enabled.
+      no-inline-comments: false
+      no-prefix-comments: false
+      custom-order: true
+      no-lex-order: false
+    gofmt:
+      simplify: true
+      rewrite-rules: []
+    gofumpt:
+      module-path: github.com/ardnew/envcomp
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/ardnew/envcomp
+    golines:
+      max-len: 80
+      tab-len: 2
+      shorten-comments: true
+      reformat-tags: true
+      chain-split-dots: true
+  exclusions:
+    warn-unused: true
+    generated: strict
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+  new: false
+  # new-from-merge-base: main
+  # new-from-rev: HEAD
+  # new-from-patch: path/to/patch/file
+  # whole-files: true
+  fix: true
+
+output:
+  formats:
+    text:
+      path: stderr
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+    # json:
+    #   path: stderr
+    tab:
+      path: stderr
+      print-linter-name: true
+      colors: true
+    # html:
+    #   path: stderr
+  path-prefix: github.com/ardnew/envcomp
+  path-mode: abs
+  sort-results: true
+  sort-order:
+    - linter
+    - severity
+    - file
+  show-stats: true
+
+run:
+  timeout: "0"
+  relative-path-mode: gomod
+  issues-exit-code: 100
+  tests: false
+  build-tags: ["pprof"]
+  modules-download-mode: mod
+  allow-parallel-runners: true
+  allow-serial-runners: true
+  # go: ''
+  concurrency: 0
+
+severity:
+  default: "@linter"
+  rules: []

@@ -1,0 +1,61 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "debug: cmd/envcomp",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "hideSystemGoroutines": true,
+      "showGlobalVariables": true,
+      "showLog": true,
+      "showRegisters": false,
+      "preLaunchTask": "generate: all",
+      "program": "${workspaceFolder}/cmd/envcomp",
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false,
+      "buildFlags": [
+        "-gcflags=-N -l"
+      ],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "TMPDIR": "",
+        "GOEXPERIMENT": "greenteagc",
+      },
+      "args": [
+        "--log-level=debug",
+        "fmt"
+      ],
+    },
+    {
+      "name": "debug (pprof=allocs): cmd/envcomp",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "hideSystemGoroutines": true,
+      "showGlobalVariables": true,
+      "showLog": true,
+      "showRegisters": false,
+      "preLaunchTask": "generate: all",
+      "program": "${workspaceFolder}/cmd/envcomp",
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": false,
+      "buildFlags": [
+        "-tags=pprof",
+        "-gcflags=-N -l"
+      ],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "env": {
+        "TMPDIR": "",
+        "GOEXPERIMENT": "greenteagc",
+      },
+      "args": [
+        "--log-level=debug",
+        "--pprof-mode=allocs",
+        "--help"
+      ],
+    },
+  ]
+}

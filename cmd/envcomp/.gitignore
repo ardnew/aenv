@@ -1,0 +1,10 @@
+/envcomp
+.envcomp
+
+/*.out
+/*.txt
+/*.svg
+/*.prof
+/*.pprof
+
+/.tmp

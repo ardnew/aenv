@@ -1,0 +1,110 @@
+// filepath: .vscode/settings.json
+{
+  "code-runner.fileDirectoryAsCwd": true,
+  "code-runner.ignoreSelection": true,
+  "code-runner.saveFileBeforeRun": true,
+  "code-runner.executorMapByGlob": {
+    "grammar.md": "go generate $dir/../lang.go",
+  },
+
+  "go.terminal.activateEnvironment": false,
+
+  "go.buildFlags": [
+    "-v",
+    "-tags=pprof",
+    "-gcflags=-N -l"
+  ],
+  "go.toolsEnvVars": {
+    "TMPDIR": "",
+    "GOEXPERIMENT": "",
+  },
+
+  "go.testFlags": [
+    "-v",
+    "-tags=test,pprof",
+    "-timeout=30s",
+  ],
+  "go.testEnvVars": {
+    "TMPDIR": "",
+    "GOEXPERIMENT": "greenteagc",
+  },
+
+  "go.diagnostic.vulncheck": "Imports",
+
+  "go.lintTool": "golangci-lint-v2",
+  "go.lintOnSave": "workspace",
+  "go.lintFlags": [
+    "--config=.golangci.yml",
+    "--path-mode=abs",
+    "--fix",
+  ],
+
+  "go.formatTool": "custom",
+  "go.alternateTools": {
+    "customFormatter": "golangci-lint-v2"
+  },
+  "go.formatFlags": [
+    "fmt",
+    "--config=.golangci.yml",
+    "--fix",
+    "--stdin"
+  ],
+
+  "gopls": {
+    "build.buildFlags": [
+      "-tags=pprof",
+      "-gcflags=-N -l"
+    ],
+    "build.env": {
+      "TMPDIR": "",
+      "GOEXPERIMENT": "greenteagc",
+    },
+    "formatting.local": "github.com/ardnew/envcomp",
+    "ui.codelenses": {
+      "build": true,
+      "generate": true,
+      "test": true,
+      "tidy": true,
+      "upgrade_dependency": true,
+      "vulncheck": true,
+    },
+    "ui.diagnostic.analyses": {
+      "nilness": true,
+      "shadow": true,
+      "staticcheck": true,
+      "structtag": false,
+      "unreachable": true,
+      "unsafemarshal": true,
+      "unsafemath": true,
+      "unsafeprop": true,
+      "unsafeptr": true,
+      "unsafeslice": true,
+      "unsafetype": true,
+      "unusedfunc": true,
+      "unusedparams": true,
+      "unusedwrite": true,
+      "useany": true,
+    },
+  },
+
+  "chat.promptFilesLocations": {
+    "prompts": true
+  },
+  "chat.instructionsFilesLocations": {
+    "instructions": true
+  },
+
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "files.associations": {
+    "*.chatmode.md": "markdown",
+    "*.instructions.md": "markdown",
+    "*.prompt.md": "markdown"
+  },
+
+  "[markdown]": {
+    "editor.formatOnSave": true
+  },
+  "git.ignoreLimitWarning": true,
+}
