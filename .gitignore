@@ -9,11 +9,15 @@
 *.out
 
 *.pprof
+*.prof
 
 /notes.md
 /*.txt
 /*.svg
 
-/envcomp
+/aenv
+.aenv
 
 **/*instructions.md
+*claude*
+*CLAUDE*

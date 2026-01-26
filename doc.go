@@ -1,3 +1,2 @@
-// Package envcomp provides tools for working with its own configuration
-// language.
-package envcomp
+// Package main contains the entry point for the aenv command.
+package main

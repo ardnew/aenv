@@ -29,7 +29,7 @@ linters:
     rules:
       - linters:
           - staticcheck
-        path: pkg/lang/internal/
+        path: lang/internal/
       - linters:
           - mnd
           - gomnd
@@ -38,7 +38,7 @@ linters:
           - exhaustive
           - nestif
           - err113
-        path: pkg/lang/lang.go
+        path: lang/lang.go
       - linters:
           - structtag
         source: "`(cmd|arg)`"
@@ -53,27 +53,32 @@ linters:
         source: "^//go:generate "
       - linters: # Disable global var warnings for idents prefixed "[dD]efault[…]".
           - gochecknoglobals
-        source: "^(var|const)?\\s+([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)"
+          - mnd
+          - gomnd
+        source: "^(var|const)?\\s+(([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)|\\w+\\s*=\\s*sync\\.Once)"
       - linters:
           - lll
-        path: cmd/envcomp/cli/
+        path: cli/
       - linters:
           - exhaustruct
           - mnd
           - gomnd
         source: "slog\\.Attr\\{\\}|Syntax\\{|kong\\.HelpOptions\\{"
       - linters:
+          - ireturn
+        source: "func (Make|Wrap)"
+      - linters:
           - nilnil
           - ireturn
           - cyclop
           - nilerr
-        path: cmd/envcomp/cli/resolver.go
+        path: cli/resolver.go
       - linters:
           - goanalysis
           - staticcheck
           - unsafe
         text: "SA1012"
-        path: pkg/log/log_test.go
+        path: log/log_test.go
       - linters:
           - markdownlint
         path: grammar\.md
@@ -83,52 +88,46 @@ linters:
           - gocyclo
           - gocognit
           - funlen
-        path: pkg/lang/marshal\.go
+        path: lang/marshal\.go
       - linters:
           - cyclop
           - gocyclo
           - gocognit
           - funlen
-        path: pkg/log/pretty\.go
+        path: log/pretty\.go
       - linters:
           - cyclop
           - funlen
-        path: pkg/log/config\.go
+        path: log/config\.go
       - linters:
           - cyclop
           - gocyclo
           - gocognit
           - funlen
-        path: cmd/envcomp/cli/log\.go
+        path: cli/log\.go
       - linters:
           - funlen
-        path: cmd/envcomp/cli/cli\.go
+        path: cli/cli\.go
       # Dynamic errors are acceptable for user-facing error messages
       - linters:
           - err113
-        path: pkg/error\.go
+        path: errors/error\.go
       - linters:
           - err113
-        path: cmd/envcomp/parser/parser\.go
+        path: lang/stream\.go
       # Inline error handling is idiomatic in certain contexts
       - linters:
           - noinlineerr
-        path: pkg/lang/marshal\.go
+        path: lang/marshal\.go
       - linters:
           - exhaustive
-        path: pkg/log/pretty\.go
+        path: log/pretty\.go
       # Parser type assertions are safe by design
       - linters:
           - forcetypeassert
           - funcorder
           - exhaustruct
-        path: cmd/envcomp/parser/parser\.go
-      # Global variables used for package-level state
-      - linters:
-          - gochecknoglobals
-          - revive
-          - gosec
-        path: pkg/pprof/pprof\.go
+        path: lang/stream\.go
       # Local go.mod replacements needed for development
       - linters:
           - gomoddirectives
@@ -136,7 +135,19 @@ linters:
       # Magic number acceptable in marshal logic
       - linters:
           - mnd
-        path: pkg/lang/marshal\.go
+        path: lang/marshal\.go
+      - linters:
+          - gochecknoglobals
+          - mnd
+          - gomnd
+        path: cli/path\.go
+      - linters:
+          - gochecknoglobals
+        source: "map\\[string\\]func\\(\\*profile\\.Profile\\)"
+        path: profile/pprof\.go
+      - linters:
+          - gosec
+        source: "_ \"net/http/pprof\""
 
 formatters:
   enable:
@@ -163,11 +174,11 @@ formatters:
       simplify: true
       rewrite-rules: []
     gofumpt:
-      module-path: github.com/ardnew/envcomp
+      module-path: github.com/ardnew/aenv
       extra-rules: true
     goimports:
       local-prefixes:
-        - github.com/ardnew/envcomp
+        - github.com/ardnew/aenv
     golines:
       max-len: 80
       tab-len: 2
@@ -204,7 +215,7 @@ output:
       colors: true
     # html:
     #   path: stderr
-  path-prefix: github.com/ardnew/envcomp
+  path-prefix: github.com/ardnew/aenv
   path-mode: abs
   sort-results: true
   sort-order:

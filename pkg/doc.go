@@ -1,3 +1,2 @@
-// Package pkg provides type and utilities with common functionality for the
-// project.
+// Package pkg contains package metadata for the aenv project.
 package pkg
