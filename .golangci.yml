@@ -27,27 +27,10 @@ linters:
       - common-false-positives
       - legacy
     rules:
-      - linters:
-          - staticcheck
-        path: lang/internal/
-      - linters:
-          - mnd
-          - gomnd
-          - exhaustruct
-          - noinlineerr
-          - exhaustive
-          - nestif
-          - err113
-        path: lang/lang.go
+      # Source-based rules
       - linters:
           - structtag
         source: "`(cmd|arg)`"
-      - linters:
-          - gocyclo
-          - errcheck
-          - dupl
-          - gosec
-        path: _test\.go
       - linters:
           - lll
         source: "^//go:generate "
@@ -57,9 +40,6 @@ linters:
           - gomnd
         source: "^(var|const)?\\s+(([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)|\\w+\\s*=\\s*sync\\.Once)"
       - linters:
-          - lll
-        path: cli/
-      - linters:
           - exhaustruct
           - mnd
           - gomnd
@@ -68,86 +48,90 @@ linters:
           - ireturn
         source: "func (Make|Wrap)"
       - linters:
-          - nilnil
-          - ireturn
-          - cyclop
-          - nilerr
-        path: cli/resolver.go
-      - linters:
-          - goanalysis
-          - staticcheck
-          - unsafe
-        text: "SA1012"
-        path: log/log_test.go
-      - linters:
-          - markdownlint
-        path: grammar\.md
-      # Complex functions that are difficult to simplify
-      - linters:
-          - cyclop
-          - gocyclo
-          - gocognit
-          - funlen
-        path: lang/marshal\.go
-      - linters:
-          - cyclop
-          - gocyclo
-          - gocognit
-          - funlen
-        path: log/pretty\.go
-      - linters:
-          - cyclop
-          - funlen
-        path: log/config\.go
-      - linters:
-          - cyclop
-          - gocyclo
-          - gocognit
-          - funlen
-        path: cli/log\.go
-      - linters:
-          - funlen
-        path: cli/cli\.go
-      # Dynamic errors are acceptable for user-facing error messages
-      - linters:
-          - err113
-        path: errors/error\.go
-      - linters:
-          - err113
-        path: lang/stream\.go
-      # Inline error handling is idiomatic in certain contexts
-      - linters:
-          - noinlineerr
-        path: lang/marshal\.go
-      - linters:
-          - exhaustive
-        path: log/pretty\.go
-      # Parser type assertions are safe by design
-      - linters:
-          - forcetypeassert
-          - funcorder
-          - exhaustruct
-        path: lang/stream\.go
-      # Local go.mod replacements needed for development
-      - linters:
-          - gomoddirectives
-        path: go\.mod
-      # Magic number acceptable in marshal logic
-      - linters:
-          - mnd
-        path: lang/marshal\.go
-      - linters:
-          - gochecknoglobals
-          - mnd
-          - gomnd
-        path: cli/path\.go
-      - linters:
           - gochecknoglobals
         source: "map\\[string\\]func\\(\\*profile\\.Profile\\)"
         path: profile/pprof\.go
       - linters:
           - gosec
         source: "_ \"net/http/pprof\""
+      # Test files
+      - linters:
+          - gocyclo
+          - errcheck
+          - dupl
+          - gosec
+        path: _test\.go
+      # Text-based rules
+      - linters:
+          - goanalysis
+          - staticcheck
+          - unsafe
+        text: "SA1012"
+        path: log/log_test\.go
+      # Parser core has many intentional patterns
+      - linters:
+          - mnd
+          - gomnd
+          - exhaustruct
+          - noinlineerr
+          - exhaustive
+          - nestif
+          - err113
+        path: lang/lang\.go
+      # Complex functions that are difficult to simplify
+      - linters:
+          - cyclop
+          - gocyclo
+          - gocognit
+          - funlen
+        path: (lang/marshal|log/pretty|cli/log)\.go
+      - linters:
+          - cyclop
+          - gocyclo
+          - gocognit
+          - nestif
+        path: lang/format\.go
+      - linters:
+          - cyclop
+          - funlen
+        path: log/config\.go
+      - linters:
+          - funlen
+        path: cli/cli\.go
+      # Inline error handling is idiomatic in certain contexts
+      - linters:
+          - noinlineerr
+        path: lang/(marshal|format)\.go
+      # Exhaustive struct initialization not required for constructors
+      - linters:
+          - exhaustruct
+        path: (lang/(error|value)|cli/cmd/error)\.go
+      # Magic numbers acceptable in error and marshal logic
+      - linters:
+          - mnd
+        path: (lang/(marshal|error)|cli/cmd/error)\.go
+      - linters:
+          - exhaustive
+        path: log/pretty\.go
+      # CLI package rules
+      - linters:
+          - lll
+        path: cli/
+      - linters:
+          - nilnil
+          - ireturn
+          - cyclop
+          - nilerr
+        path: cli/resolver\.go
+      - linters:
+          - gochecknoglobals
+          - mnd
+          - gomnd
+        path: cli/path\.go
+      # Local go.mod replacements needed for development
+      - linters:
+          - gomoddirectives
+        path: go\.mod
 
 formatters:
   enable:

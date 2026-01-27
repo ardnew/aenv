@@ -28,8 +28,7 @@ func TestGetOrParseConfig_ParsesOnce(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			r := strings.NewReader(config)
-			p := lang.NewStream(r)
-			ast, err := p.AST()
+			ast, err := lang.ParseReader(r)
 			results[idx] = ast
 			errors[idx] = err
 		}(i)
@@ -53,22 +52,34 @@ func TestGetOrParseConfig_ParsesOnce(t *testing.T) {
 		}
 	}
 
-	// Verify namespace caching by checking same source produces same definition instances
-	p1 := lang.NewStreamFromString(config)
-	p2 := lang.NewStreamFromString(config)
-	ns1, _ := p1.GetDefinition("test")
-	ns2, _ := p2.GetDefinition("test")
-	if ns1 != ns2 {
+	// Verify definition caching by checking same source produces same definition instances
+	ast1, err := lang.ParseString(config)
+	if err != nil {
+		t.Fatalf("first ParseString failed: %v", err)
+	}
+	ast2, err := lang.ParseString(config)
+	if err != nil {
+		t.Fatalf("second ParseString failed: %v", err)
+	}
+	def1, ok1 := ast1.GetDefinition("test")
+	def2, ok2 := ast2.GetDefinition("test")
+	if !ok1 || !ok2 {
+		t.Fatal("expected definition to be found")
+	}
+	if def1 != def2 {
 		t.Error("expected same definition instance from cache")
 	}
 
 	// Verify cache has entries for this source
-	// With namespace-level caching, we don't check total cache size
+	// With definition-level caching, we don't check total cache size
 	// Just verify the definition can be retrieved
-	p := lang.NewStreamFromString(config)
-	_, err := p.GetDefinition("test")
+	ast, err := lang.ParseString(config)
 	if err != nil {
-		t.Errorf("failed to retrieve cached definition: %v", err)
+		t.Fatalf("ParseString failed: %v", err)
+	}
+	_, ok := ast.GetDefinition("test")
+	if !ok {
+		t.Error("failed to retrieve cached definition")
 	}
 }
 
@@ -80,16 +91,12 @@ func TestGetOrParseConfig_DifferentContent(t *testing.T) {
 	config2 := `other : { baz : 42 }`
 
 	// Parse two different configs
-	p1 := lang.NewStream(strings.NewReader(config1))
-
-	ast1, err1 := p1.AST()
+	ast1, err1 := lang.ParseReader(strings.NewReader(config1))
 	if err1 != nil {
 		t.Fatalf("parse config1 failed: %v", err1)
 	}
 
-	p2 := lang.NewStream(strings.NewReader(config2))
-
-	ast2, err2 := p2.AST()
+	ast2, err2 := lang.ParseReader(strings.NewReader(config2))
 	if err2 != nil {
 		t.Fatalf("parse config2 failed: %v", err2)
 	}
@@ -100,15 +107,21 @@ func TestGetOrParseConfig_DifferentContent(t *testing.T) {
 	}
 
 	// Verify both definitions are accessible
-	// With namespace-level caching, verify retrieval works
-	p1 = lang.NewStreamFromString(config1)
-	if _, e := p1.GetDefinition("test"); e != nil {
-		t.Errorf("failed to retrieve test definition: %v", e)
+	// With definition-level caching, verify retrieval works
+	ast1Reparse, err := lang.ParseString(config1)
+	if err != nil {
+		t.Fatalf("reparse config1 failed: %v", err)
+	}
+	if _, ok := ast1Reparse.GetDefinition("test"); !ok {
+		t.Error("failed to retrieve test definition")
 	}
 
-	p2 = lang.NewStreamFromString(config2)
-	if _, e := p2.GetDefinition("other"); e != nil {
-		t.Errorf("failed to retrieve other definition: %v", e)
+	ast2Reparse, err := lang.ParseString(config2)
+	if err != nil {
+		t.Fatalf("reparse config2 failed: %v", err)
+	}
+	if _, ok := ast2Reparse.GetDefinition("other"); !ok {
+		t.Error("failed to retrieve other definition")
 	}
 }
 
@@ -118,19 +131,14 @@ func TestGetOrParseConfig_ErrorHandling(t *testing.T) {
 
 	invalidConfig := `invalid syntax { { {`
 
-	p1 := lang.NewStream(strings.NewReader(invalidConfig))
-
 	// Parse invalid config
-	_, err := p1.AST()
+	_, err := lang.ParseReader(strings.NewReader(invalidConfig))
 	if err == nil {
 		t.Error("expected parse error for invalid config")
 	}
 
-	p2 := lang.NewStream(strings.NewReader(invalidConfig))
-
-	// Parse again - should return same error from cache,
-	// even though it's a different lang instance.
-	_, err2 := p2.AST()
+	// Parse again - should return same error from cache
+	_, err2 := lang.ParseReader(strings.NewReader(invalidConfig))
 	if err2 == nil {
 		t.Error("expected cached parse error")
 	}
@@ -272,13 +280,11 @@ func BenchmarkGetOrParseConfig_Cached(b *testing.B) {
 	lang.ClearCache()
 
 	config := `test : { foo : "bar", baz : 42, nested : { a : 1, b : 2 } }`
-	p := lang.NewStreamFromString(config)
-	_, _ = p.AST()
+	_, _ = lang.ParseString(config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		p := lang.NewStreamFromString(config)
-		_, err := p.AST()
+		_, err := lang.ParseString(config)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -295,8 +301,7 @@ func BenchmarkGetOrParseConfig_Uncached(b *testing.B) {
 		lang.ClearCache()
 		b.StartTimer()
 
-		p := lang.NewStreamFromString(config)
-		_, err := p.AST()
+		_, err := lang.ParseString(config)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -308,14 +313,10 @@ func TestGetOrParseConfig_ReadError(t *testing.T) {
 	// Create a reader that always fails
 	errReader := &errorReader{err: bytes.ErrTooLarge}
 
-	// New should succeed (doesn't read yet)
-	p := lang.NewStream(errReader)
-
-
-	// But accessing namespace should fail when it tries to read
-	_, err := p.GetDefinition("test")
+	// ParseReader should return the error
+	_, err := lang.ParseReader(errReader)
 	if err == nil {
-		t.Error("expected error from failing reader")
+		t.Error("expected read error")
 	}
 	if !strings.Contains(err.Error(), "failed to read input") {
 		t.Errorf("expected 'failed to read input' error, got: %v", err)

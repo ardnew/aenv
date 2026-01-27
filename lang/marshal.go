@@ -24,10 +24,10 @@ func (ast *AST) ToMap() map[string]any {
 		if len(def.Parameters) > 0 {
 			params := make([]any, len(def.Parameters))
 			for i, param := range def.Parameters {
-				params[i] = param.toNative()
+				params[i] = param.ToNative()
 			}
 
-			value := def.Value.toNative()
+			value := def.Value.ToNative()
 
 			// If the value is a map, flatten it into the same object as (parameters)
 			if valueMap, ok := value.(map[string]any); ok {
@@ -46,15 +46,15 @@ func (ast *AST) ToMap() map[string]any {
 			}
 		} else {
 			// No parameters: output value directly
-			result[name] = def.Value.toNative()
+			result[name] = def.Value.ToNative()
 		}
 	}
 
 	return result
 }
 
-// toNative converts a Value to its native Go type.
-func (v *Value) toNative() any {
+// ToNative converts a Value to its native Go type.
+func (v *Value) ToNative() any {
 	switch v.Type {
 	case TypeIdentifier:
 		return v.Token.LiteralString()
@@ -157,15 +157,15 @@ func (v *Value) toNative() any {
 
 						params := make([]any, len(val.Definition.Parameters))
 						for i, param := range val.Definition.Parameters {
-							params[i] = param.toNative()
+							params[i] = param.ToNative()
 						}
 
 						defData["(parameters)"] = params
-						defData["(value)"] = val.Definition.Value.toNative()
+						defData["(value)"] = val.Definition.Value.ToNative()
 						result[name] = defData
 					} else {
 						// No parameters: just use the value
-						result[name] = val.Definition.Value.toNative()
+						result[name] = val.Definition.Value.ToNative()
 					}
 				}
 			}
@@ -176,7 +176,7 @@ func (v *Value) toNative() any {
 		// Mixed tuple or all literals: return as array
 		result := make([]any, 0, len(v.Tuple.Aggregate))
 		for _, val := range v.Tuple.Aggregate {
-			result = append(result, val.toNative())
+			result = append(result, val.ToNative())
 		}
 
 		return result
@@ -195,15 +195,15 @@ func (v *Value) toNative() any {
 
 			params := make([]any, len(v.Definition.Parameters))
 			for i, param := range v.Definition.Parameters {
-				params[i] = param.toNative()
+				params[i] = param.ToNative()
 			}
 
 			defData["(parameters)"] = params
-			defData["(value)"] = v.Definition.Value.toNative()
+			defData["(value)"] = v.Definition.Value.ToNative()
 			result[name] = defData
 		} else {
 			// No parameters: simple key-value
-			result[name] = v.Definition.Value.toNative()
+			result[name] = v.Definition.Value.ToNative()
 		}
 
 		return result

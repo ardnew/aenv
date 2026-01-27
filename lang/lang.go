@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -17,6 +18,45 @@ import (
 // AST represents the abstract syntax tree for the aenv language.
 type AST struct {
 	Definitions []*Definition
+}
+
+// Define adds a new definition to the AST and returns it.
+func (ast *AST) Define(
+	identifier string,
+	params []*Value,
+	value *Value,
+) *Definition {
+	def := &Definition{
+		Identifier: newToken("identifier", identifier),
+		Parameters: params,
+		Value:      value,
+	}
+	ast.Definitions = append(ast.Definitions, def)
+
+	return def
+}
+
+// GetDefinition retrieves a definition by its identifier.
+// Returns (nil, false) if the definition is not found.
+func (ast *AST) GetDefinition(name string) (*Definition, bool) {
+	for _, def := range ast.Definitions {
+		if def.Identifier.LiteralString() == name {
+			return def, true
+		}
+	}
+
+	return nil, false
+}
+
+// All returns an iterator over all definitions in the AST.
+func (ast *AST) All() iter.Seq[*Definition] {
+	return func(yield func(*Definition) bool) {
+		for _, def := range ast.Definitions {
+			if !yield(def) {
+				return
+			}
+		}
+	}
 }
 
 // Definition represents a definition declaration: identity [Parameters] :
@@ -106,11 +146,13 @@ func DefaultParseOptions() ParseOptions {
 }
 
 // ParseString parses input string and returns the AST.
+// The result is cached for efficient repeated parsing of the same content.
 func ParseString(input string) (*AST, error) {
-	return ParseStringWithOptions(input, DefaultParseOptions())
+	return parseStringCached(input)
 }
 
 // ParseStringWithOptions parses input string with custom options.
+// Note: This function bypasses caching since options may vary.
 func ParseStringWithOptions(input string, opts ParseOptions) (*AST, error) {
 	ast, err := ParseWithOptions(lexer.New([]rune(input)), opts, input)
 
@@ -410,11 +452,6 @@ func (ctx *buildContext) buildValue(b bsr.BSR) (*Value, error) {
 
 	default:
 		attr := []slog.Attr{slog.String("token", "Value")}
-
-		// _, src, ok := strings.Cut(b.String(), " - ")
-		// if ok {
-		// 	attr = append(attr, slog.String("source", src))
-		// }
 
 		return nil, ErrInvalidToken.With(attr...)
 	}

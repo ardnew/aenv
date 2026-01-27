@@ -80,4 +80,5 @@ var (
 	ErrJSONMarshal = NewError("JSON marshal error")
 	ErrYAMLMarshal = NewError("YAML marshal error")
 	ErrWriteConfig = NewError("failed to write configuration file")
+	ErrFileExists  = NewError("file already exists (use --force to overwrite)")
 )

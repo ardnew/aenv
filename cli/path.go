@@ -95,18 +95,6 @@ func configPath(elem ...string) string {
 	return filepath.Join(append([]string{configDir()}, elem...)...)
 }
 
-/*
-
-// cachePath returns the absolute path to a file or directory formed by joining
-// the global cache directory path with the given path elements.
-//
-// If no elements are given, it is equivalent to calling [cacheDir].
-func cachePath(elem ...string) string {
-	return filepath.Join(append([]string{cacheDir()}, elem...)...)
-}
-
-*/
-
 // mkdirAllRequired creates all required runtime directories.
 func mkdirAllRequired() error {
 	// Create base config directory

@@ -46,10 +46,14 @@ import (
 func resolve(name string) func(r io.Reader) (kong.Resolver, error) {
 	return func(r io.Reader) (kong.Resolver, error) {
 		// Parse the config file (cached after first parse)
-		p := lang.NewStream(r)
-
-		def, err := p.GetDefinition(name)
+		ast, err := lang.ParseReader(r)
 		if err != nil {
+			// Parse error - return empty config
+			return config{}, nil
+		}
+
+		def, ok := ast.GetDefinition(name)
+		if !ok {
 			// Definition not found - return empty config
 			return config{}, nil
 		}
@@ -105,85 +109,22 @@ func tupleToMap(t *lang.Tuple) map[string]any {
 		// If this value is a Definition, use its identifier as the key
 		if val.Type == lang.TypeDefinition && val.Definition != nil {
 			key := val.Definition.Identifier.LiteralString()
-			result[key] = valueToNative(val.Definition.Value)
+			nativeValue := val.Definition.Value.ToNative()
+
+			// Kong requires numbers as strings for parsing
+			if num, ok := nativeValue.(int64); ok {
+				result[key] = strconv.FormatInt(num, 10)
+			} else if num, ok := nativeValue.(float64); ok {
+				result[key] = strconv.FormatFloat(num, 'f', -1, 64)
+			} else {
+				result[key] = nativeValue
+			}
 		} else {
 			// Otherwise, it's a value without a key (shouldn't happen in map context)
 			// but handle it gracefully by using the index
-			result[strconv.Itoa(len(result))] = valueToNative(val)
+			result[strconv.Itoa(len(result))] = val.ToNative()
 		}
 	}
 
 	return result
-}
-
-// isAggregate checks if a Tuple represents an aggregate (array) rather than
-// a structured tuple (map). Aggregates have values that are not Definitions.
-func isAggregate(t *lang.Tuple) bool {
-	if t == nil || len(t.Aggregate) == 0 {
-		return false
-	}
-	// Check if all values are NOT Definitions (no keys)
-	for _, val := range t.Aggregate {
-		if val.Type == lang.TypeDefinition {
-			return false // Has a key-value pair, so it's a map
-		}
-	}
-
-	return true // All plain values, so it's an array
-}
-
-// valueToNative converts a Value to its native Go type for configuration.
-func valueToNative(v *lang.Value) any {
-	switch v.Type {
-	case lang.TypeIdentifier:
-		return v.Token.LiteralString()
-
-	case lang.TypeNumber:
-		// Kong will parse numbers from strings as needed
-		return v.Token.LiteralString()
-
-	case lang.TypeString:
-		// Remove quotes from string literals
-		s := v.Token.LiteralString()
-		if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-			// Unquote the string (escape sequences handled by lang.ParseString)
-			s = s[1 : len(s)-1]
-		}
-
-		return s
-
-	case lang.TypeExpr:
-		// Return code as-is (enclosed in {{ }})
-		return v.Token.LiteralString()
-
-	case lang.TypeBoolean:
-		s := v.Token.LiteralString()
-
-		return s == "true"
-
-	case lang.TypeTuple:
-		// Check if this is an aggregate (array) or a structured tuple (map)
-		// Aggregates have values that are not Definitions
-		if isAggregate(v.Tuple) {
-			result := make([]any, len(v.Tuple.Aggregate))
-			for i, val := range v.Tuple.Aggregate {
-				result[i] = valueToNative(val)
-			}
-
-			return result
-		}
-
-		return tupleToMap(v.Tuple)
-
-	case lang.TypeDefinition:
-		// Recursively handle definitions - treat as tuples if the value is one
-		if v.Definition != nil && v.Definition.Value != nil {
-			return valueToNative(v.Definition.Value)
-		}
-
-		return nil
-
-	default:
-		return nil
-	}
 }
