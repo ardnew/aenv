@@ -43,9 +43,9 @@ func _() {
 	_ = x[FormatJSON-1]
 }
 
-const _Format_name = "FormatTextFormatJSON"
+const _Format_name = "textjson"
 
-var _Format_index = [...]uint8{0, 10, 20}
+var _Format_index = [...]uint8{0, 4, 8}
 
 func (i Format) String() string {
 	idx := int(i) - 0

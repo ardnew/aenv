@@ -4,6 +4,7 @@ package log
 
 import (
 	"io"
+	"iter"
 	"log/slog"
 	"strings"
 	"sync"
@@ -23,6 +24,22 @@ const (
 // DefaultLevel is the default log level.
 const DefaultLevel = LevelInfo
 
+// Levels returns an iterator over all defined log levels.
+func Levels() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for _, level := range []Level{
+			LevelDebug,
+			LevelInfo,
+			LevelWarn,
+			LevelError,
+		} {
+			if !yield(level.String()) {
+				return
+			}
+		}
+	}
+}
+
 // ParseLevel parses a string representation of a log level.
 // Valid level strings are "DEBUG", "INFO", "WARN", and "ERROR",
 // optionally followed by a "+" or "-" and an integer offset.
@@ -38,6 +55,31 @@ func ParseLevel(s string) Level {
 	return Level(*l)
 }
 
+// Format represents the output format for log messages.
+type Format int
+
+const (
+	FormatText Format = iota // text
+	FormatJSON               // json
+)
+
+// DefaultFormat is the default log message format.
+const DefaultFormat = FormatJSON
+
+// Formats returns an iterator over all defined log formats.
+func Formats() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for _, format := range []Format{
+			FormatJSON,
+			FormatText,
+		} {
+			if !yield(format.String()) {
+				return
+			}
+		}
+	}
+}
+
 // ParseFormat parses a string representation of a log format.
 // Valid format strings are "json" and "text".
 func ParseFormat(s string) Format {
@@ -50,20 +92,6 @@ func ParseFormat(s string) Format {
 		return DefaultFormat
 	}
 }
-
-// Format represents the output format for log messages.
-type Format int
-
-const (
-	// FormatText represents plain text output format.
-	FormatText Format = iota
-
-	// FormatJSON represents JSON output format.
-	FormatJSON
-)
-
-// DefaultFormat is the default log message format.
-const DefaultFormat = FormatJSON
 
 // FormatTime defines a function that formats a time.Time value as a string.
 type FormatTime func(time.Time) string

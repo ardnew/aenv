@@ -9,12 +9,11 @@ import (
 )
 
 // pprof is empty when built without pprof tag.
-type pprof struct{}
+type pprofConfig struct{}
 
+func (pprofConfig) vars() kong.Vars { return kong.Vars{} }
 
-func (pprof) vars() kong.Vars { return kong.Vars{} }
+func (pprofConfig) group() kong.Group { return kong.Group{} }
 
-func (pprof) group() kong.Group { return kong.Group{} }
-
-// startProfiling is a no-op when built without pprof tag.
-func (pprof) start(context.Context) (stop func()) { return func() {} }
+// start is a no-op when built without pprof tag.
+func (pprofConfig) start(context.Context) (stop func()) { return func() {} }

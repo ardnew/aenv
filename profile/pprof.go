@@ -3,8 +3,8 @@
 package profile
 
 import (
+	"iter"
 	"maps"
-	"slices"
 	"sync"
 
 	"github.com/pkg/profile"
@@ -15,11 +15,11 @@ import (
 // Modes returns the list of supported profiling modes when built with the
 // pprof build tag. The special mode "quiet" is omitted from the list.
 var Modes = sync.OnceValue(
-	func() []string {
+	func() iter.Seq[string] {
 		m := maps.Clone(mode)
 		delete(m, "quiet")
 
-		return slices.Sorted(maps.Keys(m))
+		return maps.Keys(m)
 	},
 )
 

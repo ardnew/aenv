@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"maps"
 	"strconv"
-	"strings"
 )
 
 // MarshalJSON implements json.Marshaler for AST.
@@ -106,12 +105,7 @@ func (v *Value) ToNative() any {
 		return s
 
 	case TypeExpr:
-		s := v.Token.LiteralString()
-		// Trim the whitespace enclosed within "{{" and "}}"
-		s = strings.TrimPrefix(s, "{{")
-		s = strings.TrimSuffix(s, "}}")
-
-		s = strings.TrimSpace(s)
+		s := v.ExprSource()
 		if len(s) > 0 {
 			s = " " + s + " "
 		}
@@ -136,7 +130,7 @@ func (v *Value) ToNative() any {
 		// Check if all elements are Definitions - if so, return as an object
 		allDefs := true
 
-		for _, val := range v.Tuple.Aggregate {
+		for _, val := range v.Tuple.Values {
 			if val.Type != TypeDefinition {
 				allDefs = false
 
@@ -144,11 +138,11 @@ func (v *Value) ToNative() any {
 			}
 		}
 
-		if allDefs && len(v.Tuple.Aggregate) > 0 {
+		if allDefs && len(v.Tuple.Values) > 0 {
 			// Return as object with definition names as keys
 			result := make(map[string]any)
 
-			for _, val := range v.Tuple.Aggregate {
+			for _, val := range v.Tuple.Values {
 				if val.Definition != nil {
 					name := val.Definition.Identifier.LiteralString()
 					// If definition has parameters, wrap with (parameters)
@@ -174,8 +168,8 @@ func (v *Value) ToNative() any {
 		}
 
 		// Mixed tuple or all literals: return as array
-		result := make([]any, 0, len(v.Tuple.Aggregate))
-		for _, val := range v.Tuple.Aggregate {
+		result := make([]any, 0, len(v.Tuple.Values))
+		for _, val := range v.Tuple.Values {
 			result = append(result, val.ToNative())
 		}
 

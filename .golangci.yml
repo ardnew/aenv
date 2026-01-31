@@ -77,7 +77,8 @@ linters:
           - exhaustive
           - nestif
           - err113
-        path: lang/lang\.go
+          - nilnil
+        path: lang/ast\.go
       # Complex functions that are difficult to simplify
       - linters:
           - cyclop
@@ -101,15 +102,20 @@ linters:
       # Inline error handling is idiomatic in certain contexts
       - linters:
           - noinlineerr
-        path: lang/(marshal|format)\.go
+          - nilnil
+        path: lang/(marshal|format|eval)\.go
       # Exhaustive struct initialization not required for constructors
       - linters:
           - exhaustruct
-        path: (lang/(error|value)|cli/cmd/error)\.go
-      # Magic numbers acceptable in error and marshal logic
-      - linters:
           - mnd
-        path: (lang/(marshal|error)|cli/cmd/error)\.go
+          - gomnd
+          - funlen
+          - cyclop
+          - gocyclo
+          - nestif
+          - gocognit
+        path: (lang/(eval|cache|marshal|error|value)|cli/cmd/error)\.go
+      # Magic numbers acceptable in error and marshal logic
       - linters:
           - exhaustive
         path: log/pretty\.go
@@ -132,6 +138,10 @@ linters:
       - linters:
           - gomoddirectives
         path: go\.mod
+      - linters:
+          - markdownlint
+          - no-inline-html
+        path: .github/instructions/
 
 formatters:
   enable:

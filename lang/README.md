@@ -33,66 +33,70 @@ Code point sequences may be grouped using bracketed expressions. Groups enable:
 ```ebnf
 
 identifier
-   : ( '[\p{L}\p{Nl}\p{Other_ID_Start}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]' | '_' )
-     {
-       '[\p{L}\p{Nl}\p{Other_ID_Start}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Other_ID_Continue}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]'
-     }
-     {
-       any "-+.@/"
-       < '[\p{L}\p{Nl}\p{Other_ID_Start}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Other_ID_Continue}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]' >
-     }
-   ;
+  : (
+      '[\p{L}\p{Nl}\p{Other_ID_Start}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]' |
+      '_'
+    )
+    {
+      '[\p{L}\p{Nl}\p{Other_ID_Start}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Other_ID_Continue}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]'
+    }
+    {
+      any "-+.@/" <
+        '[\p{L}\p{Nl}\p{Other_ID_Start}\p{Mn}\p{Mc}\p{Nd}\p{Pc}\p{Other_ID_Continue}-\p{Pattern_Syntax}-\p{Pattern_White_Space}]'
+      >
+    }
+  ;
 
 boolean_literal
-   : ( 't' 'r' 'u' 'e' | 'f' 'a' 'l' 's' 'e' )
-   ;
+  : ( 't' 'r' 'u' 'e' | 'f' 'a' 'l' 's' 'e' )
+  ;
 
 number_literal
-   : [ '-' ] (
+  : [ '-' ] (
       any "123456789" { number } [ '.' { number } ]
-         [ any "eE" [ any"+-" ] < number > ] |
+        [ any "eE" [ any"+-" ] < number > ] |
       '0' {
-         '.' { number }
-            [ any "eE" [ any"+-" ] < number > ] |
-         < any "01234567" > |
-         'x' < any "0123456789abcdefABCDEF" > |
-         'b' < any "01" >
+        '.' { number }
+          [ any "eE" [ any"+-" ] < number > ] |
+        < any "01234567" > |
+        'x' < any "0123456789abcdefABCDEF" > |
+        'b' < any "01" >
       }
-     )
-   ;
+    )
+  ;
 
 string_literal
-   : < '"' {
+  : < '"' {
       not "\"\\" |
       '\\' any "\"\\abfnrtv" |
       '\\' any "ux" < any "0123456789abcdefABCDEF" > |
       '\\' < any "01234567" >
-     } '"' >
-   ;
+    } '"' >
+  ;
 
 expr_literal
-   : '{' '{' { not "}\\" | any "}\\" not "}" } '}' '}'
-   ;
+  : '{' '{' { not "}\\" | any "}\\" not "}" } '}' '}'
+  ;
 
 delimiter
-   : ','
-   ;
+  : ','
+  ;
 
 separator
-   : ';'
-   ;
+  : ';'
+  ;
 
 op_define
-   : ':'
-   ;
+  : ':'
+  ;
 
 !line_comment
-   : ( '/' '/' | '#' ) { not "\n" }
-   ;
+  : ( '/' '/' | '#' ) { not "\n" }
+  ;
 
 !block_comment
-   : '/' '*' { not "*" | '*' not "/" } '*' '/'
-   ;
+  : '/' '*' { not "*" | '*' not "/" } '*' '/'
+  ;
 
 ```
 
@@ -107,46 +111,46 @@ Syntactical rules support `empty` productions, alternation, and recursion, but n
 ```ebnf
 
 Manifest
-   : Definitions
-   ;
+  : Definitions
+  ;
 
 Definitions
-   : Definition Definitions
-   | Definition separator Definitions
-   | empty
-   ;
+  : Definition Definitions
+  | Definition separator Definitions
+  | empty
+  ;
 
 Definition
-   : identifier Parameters op_define Value
-   ;
+  : identifier Parameters op_define Value
+  ;
 
 Parameters
-   : Value Parameters
-   | empty
-   ;
+  : identifier Parameters
+  | empty
+  ;
 
 Value
-   : Literal
-   | Tuple
-   | Definition
-   | identifier
-   ;
+  : Literal
+  | Tuple
+  | Definition
+  | identifier
+  ;
+
+Values
+  : Value
+  | Value delimiter Values
+  | empty
+  ;
 
 Literal
-   : boolean_literal
-   | number_literal
-   | string_literal
-   | expr_literal
-   ;
+  : boolean_literal
+  | number_literal
+  | string_literal
+  | expr_literal
+  ;
 
 Tuple
-   : "{" Aggregate "}"
-   ;
-
-Aggregate
-   : Value
-   | Value delimiter Aggregate
-   | empty
-   ;
+  : "{" Values "}"
+  ;
 
 ```

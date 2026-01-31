@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/alecthomas/kong"
 
@@ -39,15 +41,18 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 }
 
 type logConfig struct {
-	Level      logLevel  `default:"info"    enum:"debug,info,warn,error" help:"Set log level."`
-	Format     logFormat `default:"json"    enum:"json,text"             help:"Set log format."`
-	TimeLayout string    `default:"RFC3339"                              help:"Set timestamp format."`
-	Caller     bool      `default:"false"                                help:"Include caller information."       negatable:""`
-	Pretty     bool      `default:"true"                                 help:"Enable colorized pretty printing." negatable:""`
+	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level"                    placeholder:"${enum}"`
+	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format"                   placeholder:"${enum}"`
+	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
+	Caller     bool      `default:"false"                           help:"Include caller information"                             negatable:""`
+	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"                       negatable:""`
 }
 
 func (*logConfig) vars() kong.Vars {
-	return kong.Vars{}
+	return kong.Vars{
+		"logLevelEnum":  strings.Join(slices.Collect(log.Levels()), ","),
+		"logFormatEnum": strings.Join(slices.Collect(log.Formats()), ","),
+	}
 }
 
 func (*logConfig) group() kong.Group {

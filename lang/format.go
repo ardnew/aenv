@@ -155,13 +155,13 @@ func formatTuple(t *Tuple, w io.Writer, indent, depth int) error {
 		return err
 	}
 
-	if len(t.Aggregate) > 0 && indent > 0 {
+	if len(t.Values) > 0 && indent > 0 {
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
 	}
 
-	for i, val := range t.Aggregate {
+	for i, val := range t.Values {
 		// Indent
 		if _, err := fmt.Fprint(w, strings.Repeat(" ", (depth+1)*indent)); err != nil {
 			return err
@@ -186,7 +186,7 @@ func formatTuple(t *Tuple, w io.Writer, indent, depth int) error {
 		}
 
 		if indent == 0 {
-			if i < len(t.Aggregate)-1 {
+			if i < len(t.Values)-1 {
 				if _, err := fmt.Fprint(w, ", "); err != nil {
 					return err
 				}

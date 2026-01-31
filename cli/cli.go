@@ -11,11 +11,13 @@ import (
 
 // CLI is the top-level command-line interface for aenv.
 type CLI struct {
-	logConfig `embed:"" group:"log"   prefix:"log-"`
-	pprof     `embed:"" group:"pprof" prefix:"pprof-"`
+	logConfig   `embed:"" group:"log"   prefix:"log-"`
+	pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
 
-	Init cmd.Init `cmd:"" help:"Initialize configuration file."`
-	Fmt  cmd.Fmt  `cmd:"" help:"Format namespace definitions."`
+	Init cmd.Init `cmd:"" help:"Initialize configuration file"`
+	Fmt  cmd.Fmt  `cmd:"" help:"Format namespace definitions"`
+
+	Eval cmd.Eval `cmd:"" default:"withargs" help:"Evaluate namespaces" hidden:""`
 }
 
 // Run executes the aenv CLI with the given context and arguments.
@@ -42,7 +44,7 @@ func Run(
 	})
 
 	vars = vars.CloneWith(cli.logConfig.vars())
-	vars = vars.CloneWith(cli.pprof.vars())
+	vars = vars.CloneWith(cli.pprofConfig.vars())
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -60,7 +62,7 @@ func Run(
 		kong.UsageOnError(),
 		kong.Exit(exit),
 		kong.ExplicitGroups(
-			[]kong.Group{cli.logConfig.group(), cli.pprof.group()},
+			[]kong.Group{cli.logConfig.group(), cli.pprofConfig.group()},
 		),
 		// kong.DefaultEnvars(pkg.Prefix()),
 		kong.BindSingletonProvider(func() context.Context {
@@ -92,7 +94,7 @@ func Run(
 	// TimeLayout and Caller which don't use TextUnmarshaler.
 	cli.logConfig.start(ctx)
 
-	defer cli.pprof.start(
+	defer cli.pprofConfig.start(
 		ctx,
 	)() // no-op unless built with tag pprof and enabled
 

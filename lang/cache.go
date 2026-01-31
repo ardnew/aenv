@@ -1,6 +1,8 @@
 package lang
 
 import (
+	"bytes"
+	"encoding/gob"
 	"io"
 	"log/slog"
 	"strconv"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/klauspost/readahead"
 	"github.com/zeebo/xxh3"
+
+	"github.com/ardnew/aenv/lang/lexer"
 )
 
 var (
@@ -26,9 +30,24 @@ type state struct {
 	err         error
 }
 
+// hashOptions encodes options using gob and hashes with xxh3.
+// Returns a hash that uniquely identifies the options configuration.
+func hashOptions(opts optionsKey) uint64 {
+	var buf bytes.Buffer
+
+	enc := gob.NewEncoder(&buf)
+
+	// Encode relevant options fields
+	_ = enc.Encode(opts.maxDepth)
+	_ = enc.Encode(opts.compileExprs)
+	_ = enc.Encode(opts.processEnv)
+
+	return xxh3.Hash(buf.Bytes())
+}
+
 // ParseReader parses input from an io.Reader and returns the AST.
 // The reader content is cached after first parse for efficiency.
-func ParseReader(r io.Reader) (*AST, error) {
+func ParseReader(r io.Reader, opts ...Option) (*AST, error) {
 	// Wrap reader with async read-ahead for concurrent I/O.
 	// This allows data to be pre-fetched while we process previous chunks.
 	ra := readahead.NewReader(r)
@@ -40,14 +59,34 @@ func ParseReader(r io.Reader) (*AST, error) {
 			With(slog.String("source", "reader"))
 	}
 
-	return parseStringCached(string(data))
+	// Build a temporary AST to determine options state
+	var tempAST AST
+
+	applyDefaults(&tempAST)
+	applyOptions(&tempAST, opts...)
+
+	// If options differ from defaults (e.g., compileExprs), bypass cache
+	if tempAST.opts.compileExprs || tempAST.opts.maxDepth != DefaultMaxDepth {
+		return ParseString(string(data), opts...)
+	}
+
+	return parseStringCached(string(data), opts...)
 }
 
 // parseStringCached parses a string with caching.
-func parseStringCached(source string) (*AST, error) {
+func parseStringCached(source string, opts ...Option) (*AST, error) {
+	// Build a temporary AST to get effective options
+	var tempAST AST
+
+	applyDefaults(&tempAST)
+	applyOptions(&tempAST, opts...)
+
 	// Generate source key (hash) for caching - using xxhash3 for performance
-	hash := xxh3.Hash([]byte(source))
-	sourceKey := strconv.FormatUint(hash, 36)
+	// Combine source hash with options hash for cache key uniqueness
+	sourceHash := xxh3.Hash([]byte(source))
+	optsHash := hashOptions(tempAST.opts)
+	combinedHash := sourceHash ^ optsHash
+	sourceKey := strconv.FormatUint(combinedHash, 36)
 
 	// Get or create metadata entry
 	entry := new(state)
@@ -62,7 +101,7 @@ func parseStringCached(source string) (*AST, error) {
 	// Ensure the source has been parsed
 	metadata.once.Do(func() {
 		// Parse source to extract definitions (bypassing cache)
-		ast, parseErr := ParseStringWithOptions(source, DefaultParseOptions())
+		ast, parseErr := parse(lexer.New([]rune(source)), source, opts...)
 		if parseErr != nil {
 			metadata.err = WrapError(parseErr).With(
 				slog.Int("source_length", len(source)),
@@ -89,6 +128,9 @@ func parseStringCached(source string) (*AST, error) {
 	ast := &AST{
 		Definitions: make([]*Definition, len(metadata.identifiers)),
 	}
+
+	applyDefaults(ast)
+	applyOptions(ast, opts...)
 
 	for i, id := range metadata.identifiers {
 		cacheKey := sourceKey + ":" + id

@@ -23,7 +23,7 @@ import (
 //   - Flag names with hyphens (e.g., "log-level") should use underscores
 //     in the config file (e.g., "log_level")
 //   - Tuples are converted to nested objects
-//   - Aggregates are converted to arrays
+//   - Valuess are converted to arrays
 //   - String values should be quoted
 //   - Boolean values are true or false (unquoted)
 //   - Numbers are unquoted
@@ -105,7 +105,7 @@ func (r config) Resolve(
 func tupleToMap(t *lang.Tuple) map[string]any {
 	result := make(map[string]any)
 
-	for _, val := range t.Aggregate {
+	for _, val := range t.Values {
 		// If this value is a Definition, use its identifier as the key
 		if val.Type == lang.TypeDefinition && val.Definition != nil {
 			key := val.Definition.Identifier.LiteralString()

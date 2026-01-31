@@ -50,10 +50,10 @@ func NewExpr(expr string) *Value {
 }
 
 // NewTuple creates a tuple [Value].
-func NewTuple(aggregate ...*Value) *Value {
+func NewTuple(values ...*Value) *Value {
 	return &Value{
 		Type:  TypeTuple,
-		Tuple: &Tuple{Aggregate: aggregate},
+		Tuple: &Tuple{Values: values},
 	}
 }
 

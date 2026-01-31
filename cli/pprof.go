@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -14,19 +15,19 @@ import (
 	"github.com/ardnew/aenv/profile"
 )
 
-type pprof struct {
-	Mode string `default:""            enum:",${pprofModes}" help:"Enable profiling."         placeholder:"${enum}" short:"p"`
-	Dir  string `default:"${pprofDir}"                       help:"Profile output directory."                                 type:"path"`
+type pprofConfig struct {
+	Mode string `default:""            enum:"${pprofModeEnum}" help:"Enable profiling"         placeholder:"${enum}" short:"p"`
+	Dir  string `default:"${pprofDir}"                         help:"Profile output directory"                                 type:"path"`
 }
 
-func (pprof) vars() kong.Vars {
+func (pprofConfig) vars() kong.Vars {
 	return kong.Vars{
-		"pprofModes": strings.Join(profile.Modes(), ","),
-		"pprofDir":   filepath.Join(cacheDir(), profile.Tag),
+		"pprofModeEnum": strings.Join(slices.Sorted(profile.Modes()), ","),
+		"pprofDir":      filepath.Join(cacheDir(), profile.Tag),
 	}
 }
 
-func (pprof) group() kong.Group {
+func (pprofConfig) group() kong.Group {
 	var group kong.Group
 
 	group.Key = "pprof"
@@ -36,7 +37,7 @@ func (pprof) group() kong.Group {
 }
 
 // start starts profiling if configured.
-func (f pprof) start(ctx context.Context) (stop func()) {
+func (f pprofConfig) start(ctx context.Context) (stop func()) {
 	if f.Mode == "" {
 		return func() {}
 	}

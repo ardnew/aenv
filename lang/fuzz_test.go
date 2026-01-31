@@ -14,7 +14,7 @@ func FuzzLexer(f *testing.F) {
 	f.Add("foo")
 	f.Add("123")
 	f.Add(`"string"`)
-	f.Add("<{code}>")
+	f.Add("{{code}}")
 	f.Add("// comment\n")
 	f.Add("/* block */")
 	f.Add("foo-bar_baz.qux")
@@ -67,7 +67,7 @@ func FuzzParser(f *testing.F) {
 	f.Add("ns:{key=[1,2,3]}")
 	f.Add("ns:{key={nested=val}}")
 	f.Add(`ns:{str="hello"}`)
-	f.Add("ns:{code=<{foo}>}")
+	f.Add("ns:{code={{foo}}}")
 	f.Add("ns:{num=123}")
 	f.Add("ns:{neg=-456}")
 	f.Add("ns:{float=12.34}")
@@ -218,11 +218,11 @@ func FuzzString(f *testing.F) {
 
 // FuzzCodeLiteral tests code literal lexing specifically.
 func FuzzCodeLiteral(f *testing.F) {
-	f.Add("<{}>")
-	f.Add("<{foo}>")
-	f.Add("<{foo; bar}>")
-	f.Add("<{foo, bar}>")
-	f.Add("<{foo} bar}>")
+	f.Add("{{}}")
+	f.Add("{{foo}}")
+	f.Add("{{foo; bar}}")
+	f.Add("{{foo, bar}}")
+	f.Add("{{foo\\} bar}}")
 
 	f.Fuzz(func(t *testing.T, input string) {
 		if !utf8.ValidString(input) {
@@ -269,5 +269,73 @@ func FuzzNestedStructures(f *testing.F) {
 
 		// Should not panic even with deeply nested structures
 		_, _ = parser.Parse(l)
+	})
+}
+
+// FuzzEvaluateExpr tests expression evaluation with random inputs.
+func FuzzEvaluateExpr(f *testing.F) {
+	// Seed corpus with valid expression patterns
+	f.Add("val : {{ 1 + 2 }}")
+	f.Add("val : {{ true }}")
+	f.Add(`val : {{ "hello" }}`)
+	f.Add("math : { a : 10, b : {{ a * 2 }} }")
+	f.Add("config : { x : 5, y : {{ x + 1 }}, z : {{ y * 2 }} }")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		if !utf8.ValidString(input) {
+			t.Skip("invalid UTF-8")
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("evaluation panicked on %q: %v", input, r)
+			}
+		}()
+
+		// Parse with expression compilation
+		ast, err := ParseString(input, WithCompileExprs(true))
+		if err != nil {
+			return // Parse errors are expected for random input
+		}
+
+		// Try to evaluate each definition without parameters
+		for _, def := range ast.Definitions {
+			if len(def.Parameters) == 0 {
+				_, _ = ast.EvaluateDefinition(
+					def.Identifier.LiteralString(),
+					nil,
+				)
+			}
+		}
+	})
+}
+
+// FuzzMarshalJSON tests JSON marshaling with random inputs.
+func FuzzMarshalJSON(f *testing.F) {
+	// Seed corpus with valid structures
+	f.Add("ns : { key : 123 }")
+	f.Add(`ns : { str : "hello" }`)
+	f.Add("ns : { nested : { inner : 42 } }")
+	f.Add("ns : { list : { 1, 2, 3 } }")
+	f.Add(`ns : { mixed : { a : 1, b : "two", c : true } }`)
+
+	f.Fuzz(func(t *testing.T, input string) {
+		if !utf8.ValidString(input) {
+			t.Skip("invalid UTF-8")
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("marshal panicked on %q: %v", input, r)
+			}
+		}()
+
+		ast, err := ParseString(input)
+		if err != nil {
+			return // Parse errors are expected for random input
+		}
+
+		// Should not panic on any valid AST
+		_, _ = ast.MarshalJSON()
 	})
 }

@@ -44,7 +44,7 @@ func TestAST_MarshalJSON(t *testing.T) {
 }
 
 func TestAST_MarshalJSON_WithArguments(t *testing.T) {
-	input := `test 42 "hello" : { foo : true }`
+	input := `test region env : { foo : true }`
 
 	ast, err := ParseString(input)
 	if err != nil {
@@ -73,14 +73,14 @@ func TestAST_MarshalJSON_WithArguments(t *testing.T) {
 		t.Errorf("expected 2 parameters, got %d", len(args))
 	}
 
-	// First parameter should be number 42
-	if arg0, ok := args[0].(float64); !ok || arg0 != 42 {
-		t.Errorf("expected first parameter to be 42, got %v (type %T)", args[0], args[0])
+	// First parameter should be identifier "region"
+	if arg0, ok := args[0].(string); !ok || arg0 != "region" {
+		t.Errorf("expected first parameter to be 'region', got %v (type %T)", args[0], args[0])
 	}
 
-	// Second parameter should be string "hello"
-	if arg1, ok := args[1].(string); !ok || arg1 != "hello" {
-		t.Errorf("expected second parameter to be 'hello', got %v (type %T)", args[1], args[1])
+	// Second parameter should be identifier "env"
+	if arg1, ok := args[1].(string); !ok || arg1 != "env" {
+		t.Errorf("expected second parameter to be 'env', got %v (type %T)", args[1], args[1])
 	}
 
 	// Since value is a map (object), it should be flattened alongside (parameters)
@@ -224,7 +224,7 @@ func TestAST_MarshalYAML(t *testing.T) {
 }
 
 func TestAST_MarshalYAML_WithArguments(t *testing.T) {
-	input := `test 42 "world" : { greeting : "hello" }`
+	input := `test region env : { greeting : "hello" }`
 
 	ast, err := ParseString(input)
 	if err != nil {

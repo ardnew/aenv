@@ -24,7 +24,7 @@ const (
 
 // Init generates a default configuration file with current flag values.
 type Init struct {
-	Force bool `help:"Overwrite existing configuration file." short:"f"`
+	Force bool `help:"Overwrite existing configuration file" short:"f"`
 }
 
 // Run executes the init command.

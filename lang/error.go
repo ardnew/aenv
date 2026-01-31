@@ -18,6 +18,12 @@ var (
 	ErrMaxDepthExceeded   = NewError("maximum definition depth exceeded")
 	ErrDefinitionNotFound = NewError("definition not found")
 	ErrReadInput          = NewError("failed to read input")
+	ErrExprCompile        = NewError("expression compilation failed")
+	ErrExprEvaluate       = NewError("expression evaluation failed")
+	ErrParamCountMismatch = NewError("parameter count mismatch")
+	ErrInvalidValueType   = NewError("invalid value type")
+	ErrInvalidBoolean     = NewError("invalid boolean value")
+	ErrInvalidNumber      = NewError("invalid number value")
 )
 
 // Error represents an error with optional structured logging attributes.

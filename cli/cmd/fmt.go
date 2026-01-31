@@ -11,17 +11,17 @@ import (
 
 // Fmt reads input from stdin, parses it, and formats it in the chosen format.
 type Fmt struct {
-	Native Native `cmd:"" default:"withargs" help:"Format as native aenv syntax (default)."`
-	JSON   JSON   `cmd:""                    help:"Format as JSON."`
-	YAML   YAML   `cmd:""                    help:"Format as YAML."`
-	AST    AST    `cmd:""                    help:"Format as abstract syntax tree."`
+	Native Native `cmd:"" default:"withargs" help:"Format as native aenv syntax (default)"`
+	JSON   JSON   `cmd:""                    help:"Format as JSON"`
+	YAML   YAML   `cmd:""                    help:"Format as YAML"`
+	AST    AST    `cmd:""                    help:"Format as abstract syntax tree"`
 }
 
 // Native formats input as native aenv syntax.
 type Native struct {
 	Indent int `default:"2" help:"Indent width for formatted output" short:"i"`
 
-	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin." name:"source"`
+	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin" name:"source"`
 }
 
 // Run executes the fmt command.
@@ -58,7 +58,7 @@ func (f *Native) Run(ctx context.Context) (err error) {
 type JSON struct {
 	Indent int `default:"2" help:"Indent width for JSON output" short:"i"`
 
-	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin." name:"source"`
+	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin" name:"source"`
 }
 
 // Run executes the json command.
@@ -95,7 +95,7 @@ func (j *JSON) Run(ctx context.Context) (err error) {
 type YAML struct {
 	Indent int `default:"2" help:"Indent width for YAML output" short:"i"`
 
-	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin." name:"source"`
+	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin" name:"source"`
 }
 
 // Run executes the yaml command.
@@ -130,7 +130,7 @@ func (y *YAML) Run(ctx context.Context) (err error) {
 
 // AST formats input as an abstract syntax tree representation.
 type AST struct {
-	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin." name:"source"`
+	Source string `arg:"" default:"-" help:"Source input file or '-' for default stdin" name:"source"`
 }
 
 // Run executes the ast command.

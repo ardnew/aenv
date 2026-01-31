@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/expr-lang/expr/vm"
+
 	"github.com/ardnew/aenv/lang/lexer"
 	"github.com/ardnew/aenv/lang/parser"
 	"github.com/ardnew/aenv/lang/parser/bsr"
@@ -18,6 +20,8 @@ import (
 // AST represents the abstract syntax tree for the aenv language.
 type AST struct {
 	Definitions []*Definition
+	opts        optionsKey   // configuration options
+	build       buildContext // build state (used during parsing)
 }
 
 // Define adds a new definition to the AST and returns it.
@@ -67,9 +71,9 @@ type Definition struct {
 	Value      *Value
 }
 
-// Tuple represents a tuple: { [Aggregate] }.
+// Tuple represents a tuple: { [Values] }.
 type Tuple struct {
-	Aggregate []*Value
+	Values []*Value
 }
 
 // Value represents any value expression in the language.
@@ -77,8 +81,23 @@ type Value struct {
 	Type Type
 	// Exactly one of these will be set based on Type
 	Token      *token.Token // For identifiers, literals, keywords
-	Tuple      *Tuple       // For tuples/aggregates
+	Tuple      *Tuple       // For tuples/values
 	Definition *Definition  // For recursive definitions
+	Program    *vm.Program  // Compiled expr program (TypeExpr only)
+}
+
+// ExprSource returns the raw expression source for TypeExpr values.
+// It strips the surrounding {{ and }} delimiters and trims whitespace.
+func (v *Value) ExprSource() string {
+	if v.Type != TypeExpr || v.Token == nil {
+		return ""
+	}
+
+	s := v.Token.LiteralString()
+	s = strings.TrimPrefix(s, "{{")
+	s = strings.TrimSuffix(s, "}}")
+
+	return strings.TrimSpace(s)
 }
 
 // Type indicates the type of value.
@@ -129,32 +148,71 @@ func (vt Type) String() string {
 	}
 }
 
-// DefaultMaxDefinitionDepth is the default maximum depth for recursive
-// definitions.
-const DefaultMaxDefinitionDepth = 100
+// DefaultMaxDepth is the default maximum depth for recursive definitions.
+// Users may modify this before parsing to change the default.
+var DefaultMaxDepth = 100
 
-// ParseOptions configures the parser behavior.
-type ParseOptions struct {
-	MaxDefinitionDepth int
+// optionsKey holds AST configuration options.
+// This type is gob-encodable for cache key hashing.
+type optionsKey struct {
+	maxDepth     int
+	compileExprs bool
+	processEnv   []string
 }
 
-// DefaultParseOptions returns the default parse options.
-func DefaultParseOptions() ParseOptions {
-	return ParseOptions{
-		MaxDefinitionDepth: DefaultMaxDefinitionDepth,
+// buildContext tracks state during AST construction.
+type buildContext struct {
+	depth int
+	chain []string
+}
+
+// Option configures AST parsing or evaluation behavior.
+type Option func(*AST)
+
+// WithMaxDepth sets the maximum recursion depth for nested definitions.
+func WithMaxDepth(depth int) Option {
+	return func(ast *AST) {
+		ast.opts.maxDepth = depth
+	}
+}
+
+// WithCompileExprs enables expression compilation during parsing.
+func WithCompileExprs(compile bool) Option {
+	return func(ast *AST) {
+		ast.opts.compileExprs = compile
+	}
+}
+
+// WithProcessEnv sets the environment variables for expression evaluation.
+// The format is []string{"KEY=VALUE", ...}. If nil, os.Environ() is used.
+func WithProcessEnv(env []string) Option {
+	return func(ast *AST) {
+		ast.opts.processEnv = env
+	}
+}
+
+// applyDefaults sets default option values on an AST.
+func applyDefaults(ast *AST) {
+	ast.opts.maxDepth = DefaultMaxDepth
+}
+
+// applyOptions applies functional options to an AST.
+func applyOptions(ast *AST, opts ...Option) {
+	for _, opt := range opts {
+		opt(ast)
 	}
 }
 
 // ParseString parses input string and returns the AST.
-// The result is cached for efficient repeated parsing of the same content.
-func ParseString(input string) (*AST, error) {
-	return parseStringCached(input)
-}
+// Options can be provided to customize parsing behavior.
+// The result is cached for efficient repeated parsing of the same content
+// when no options or default options are used.
+func ParseString(input string, opts ...Option) (*AST, error) {
+	if len(opts) == 0 {
+		return parseStringCached(input)
+	}
 
-// ParseStringWithOptions parses input string with custom options.
-// Note: This function bypasses caching since options may vary.
-func ParseStringWithOptions(input string, opts ParseOptions) (*AST, error) {
-	ast, err := ParseWithOptions(lexer.New([]rune(input)), opts, input)
+	ast, err := parse(lexer.New([]rune(input)), input, opts...)
 
 	// If it's a ParseError, attach the source input for better error messages
 	pe := &ParseError{}
@@ -166,23 +224,30 @@ func ParseStringWithOptions(input string, opts ParseOptions) (*AST, error) {
 }
 
 // Parse parses the lexer output and returns the AST.
-func Parse(l *lexer.Lexer) (*AST, error) {
-	return ParseWithOptions(l, DefaultParseOptions(), "")
+// Options can be provided to customize parsing behavior.
+func Parse(l *lexer.Lexer, opts ...Option) (*AST, error) {
+	return parse(l, "", opts...)
 }
 
-// ParseWithOptions parses the lexer output with custom options.
-func ParseWithOptions(
-	l *lexer.Lexer,
-	opts ParseOptions,
-	source string,
-) (*AST, error) {
+// parse is the internal parsing implementation.
+func parse(l *lexer.Lexer, source string, opts ...Option) (*AST, error) {
 	bsrSet, errs := parser.Parse(l)
 
 	if len(errs) > 0 {
 		return nil, NewParseError(errs, source)
 	}
 
-	return buildAST(bsrSet, opts, source)
+	ast, err := buildAST(bsrSet, source, opts...)
+	if err != nil {
+		return ast, err
+	}
+
+	err = ast.CompileExprs()
+	if err != nil {
+		return ast, err
+	}
+
+	return ast, nil
 }
 
 // formatAmbiguityError creates a formatted error for ambiguous parses with
@@ -223,9 +288,14 @@ func formatAmbiguityError(source string, line, col int) error {
 // buildAST constructs the AST from the BSR parse forest.
 func buildAST(
 	bsrSet *bsr.Set,
-	opts ParseOptions,
 	source string,
+	opts ...Option,
 ) (ast *AST, err error) {
+	// Create AST and apply options
+	ast = &AST{}
+	applyDefaults(ast)
+	applyOptions(ast, opts...)
+
 	// Catch panics from ambiguous parses and convert to proper errors
 	defer func() {
 		if r := recover(); r != nil {
@@ -264,30 +334,39 @@ func buildAST(
 	root := bsrSet.GetRoot()
 	definitionsNode := root.GetNTChildI(0) // Get the Definitions NT at position 0
 
-	ctx := &buildContext{
-		opts:  opts,
-		depth: 0,
-		chain: []string{},
-	}
-
-	definitions, err := ctx.buildDefinitions(definitionsNode)
+	definitions, err := ast.buildDefinitions(definitionsNode)
 	if err != nil {
 		return nil, err
 	}
 
-	return &AST{Definitions: definitions}, nil
+	ast.Definitions = definitions
+	ast.resetBuildState()
+
+	return ast, nil
 }
 
-// buildContext tracks state during AST construction.
-type buildContext struct {
-	opts  ParseOptions
-	depth int
-	chain []string
+// Print writes a formatted representation of the AST to the writer.
+func (ast *AST) Print(w io.Writer) {
+	ast.PrintIndent(w, 0)
+}
+
+// PrintIndent writes a formatted representation of the AST to the writer
+// with the specified indentation.
+func (ast *AST) PrintIndent(w io.Writer, indent int) {
+	for _, def := range ast.Definitions {
+		def.Print(w, indent)
+	}
+}
+
+// resetBuildState clears build context after parsing completes.
+func (ast *AST) resetBuildState() {
+	ast.build.depth = 0
+	ast.build.chain = nil
 }
 
 // Definitions : Definition Definitions | Definition separator Definitions |
 // empty.
-func (ctx *buildContext) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
+func (ast *AST) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 	alt := b.Alternate()
 
 	if alt == 2 {
@@ -296,7 +375,7 @@ func (ctx *buildContext) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 	}
 
 	// Get the first definition (always at index 0)
-	def, err := ctx.buildDefinition(b.GetNTChildI(0))
+	def, err := ast.buildDefinition(b.GetNTChildI(0))
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +383,7 @@ func (ctx *buildContext) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 	if alt == 0 {
 		// Definition Definitions (no separator)
 		// 0=Definition 1=Definitions
-		rest, err := ctx.buildDefinitions(b.GetNTChildI(1))
+		rest, err := ast.buildDefinitions(b.GetNTChildI(1))
 		if err != nil {
 			return nil, err
 		}
@@ -314,7 +393,7 @@ func (ctx *buildContext) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 
 	// alt == 1: Definition separator Definitions
 	// 0=Definition 1=separator 2=Definitions
-	rest, err := ctx.buildDefinitions(b.GetNTChildI(2))
+	rest, err := ast.buildDefinitions(b.GetNTChildI(2))
 	if err != nil {
 		return nil, err
 	}
@@ -323,34 +402,34 @@ func (ctx *buildContext) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 }
 
 // Definition : identifier Parameters op_define Value.
-func (ctx *buildContext) buildDefinition(b bsr.BSR) (*Definition, error) {
+func (ast *AST) buildDefinition(b bsr.BSR) (*Definition, error) {
 	// Check recursion depth
-	if ctx.depth >= ctx.opts.MaxDefinitionDepth {
+	if ast.build.depth >= ast.opts.maxDepth {
 		return nil, ErrMaxDepthExceeded.
-			With(slog.Int("depth", ctx.depth)).
-			With(slog.Int("max_depth", ctx.opts.MaxDefinitionDepth)).
-			With(slog.String("chain", strings.Join(ctx.chain, " → ")))
+			With(slog.Int("depth", ast.build.depth)).
+			With(slog.Int("max_depth", ast.opts.maxDepth)).
+			With(slog.String("chain", strings.Join(ast.build.chain, " → ")))
 	}
 
 	identToken := b.GetTChildI(0)
 	identName := identToken.LiteralString()
 
 	// Track this definition in the chain
-	ctx.chain = append(ctx.chain, identName)
-	ctx.depth++
+	ast.build.chain = append(ast.build.chain, identName)
+	ast.build.depth++
 
 	defer func() {
-		ctx.depth--
-		ctx.chain = ctx.chain[:len(ctx.chain)-1]
+		ast.build.depth--
+		ast.build.chain = ast.build.chain[:len(ast.build.chain)-1]
 	}()
 
 	// 0=identifier 1=Parameters 2=op_define 3=Value
-	params, err := ctx.buildParameters(b.GetNTChildI(1))
+	params, err := ast.buildParameters(b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
 
-	val, err := ctx.buildValue(b.GetNTChildI(3))
+	val, err := ast.buildValue(b.GetNTChildI(3))
 	if err != nil {
 		return nil, err
 	}
@@ -362,20 +441,18 @@ func (ctx *buildContext) buildDefinition(b bsr.BSR) (*Definition, error) {
 	}, nil
 }
 
-// Parameters : Value Parameters | empty.
-func (ctx *buildContext) buildParameters(b bsr.BSR) ([]*Value, error) {
+// Parameters : identifier Parameters | empty.
+func (ast *AST) buildParameters(b bsr.BSR) ([]*Value, error) {
 	if b.Alternate() == 1 {
 		// empty alternate
 		return nil, nil
 	}
 
-	// Value Parameters
-	val, err := ctx.buildValue(b.GetNTChildI(0))
-	if err != nil {
-		return nil, err
-	}
+	// 0=identifier 1=Parameters
+	tok := b.GetTChildI(0)
+	val := &Value{Type: TypeIdentifier, Token: tok}
 
-	rest, err := ctx.buildParameters(b.GetNTChildI(1))
+	rest, err := ast.buildParameters(b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
@@ -383,35 +460,35 @@ func (ctx *buildContext) buildParameters(b bsr.BSR) ([]*Value, error) {
 	return append([]*Value{val}, rest...), nil
 }
 
-// Tuple : "{" Aggregate "}".
-func (ctx *buildContext) buildTuple(b bsr.BSR) (*Tuple, error) {
-	// 0="{" 1=Aggregate 2="}"
-	aggregate, err := ctx.buildAggregate(b.GetNTChildI(1))
+// Tuple : "{" Values "}".
+func (ast *AST) buildTuple(b bsr.BSR) (*Tuple, error) {
+	// 0="{" 1=Values 2="}"
+	values, err := ast.buildValues(b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
 
-	return &Tuple{Aggregate: aggregate}, nil
+	return &Tuple{Values: values}, nil
 }
 
-// Aggregate : Value | Value delimiter Aggregate | empty.
-func (ctx *buildContext) buildAggregate(b bsr.BSR) ([]*Value, error) {
+// Values : Value | Value delimiter Values | empty.
+func (ast *AST) buildValues(b bsr.BSR) ([]*Value, error) {
 	switch b.Alternate() {
 	case 0: // Value
-		val, err := ctx.buildValue(b.GetNTChildI(0))
+		val, err := ast.buildValue(b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
 
 		return []*Value{val}, nil
 
-	case 1: // 0=Value 1=delimiter 2=Aggregate
-		val, err := ctx.buildValue(b.GetNTChildI(0))
+	case 1: // 0=Value 1=delimiter 2=Values
+		val, err := ast.buildValue(b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
 
-		rest, err := ctx.buildAggregate(b.GetNTChildI(2))
+		rest, err := ast.buildValues(b.GetNTChildI(2))
 		if err != nil {
 			return nil, err
 		}
@@ -421,18 +498,18 @@ func (ctx *buildContext) buildAggregate(b bsr.BSR) ([]*Value, error) {
 		return nil, nil
 
 	default:
-		return nil, ErrInvalidToken.With(slog.String("token", "Aggregate"))
+		return nil, ErrInvalidToken.With(slog.String("token", "Values"))
 	}
 }
 
 // Value : Literal | Tuple | Definition | identifier.
-func (ctx *buildContext) buildValue(b bsr.BSR) (*Value, error) {
+func (ast *AST) buildValue(b bsr.BSR) (*Value, error) {
 	switch b.Alternate() {
 	case 0: // Literal
-		return ctx.buildLiteral(b.GetNTChildI(0))
+		return ast.buildLiteral(b.GetNTChildI(0))
 
 	case 1: // Tuple
-		tuple, err := ctx.buildTuple(b.GetNTChildI(0))
+		tuple, err := ast.buildTuple(b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +517,7 @@ func (ctx *buildContext) buildValue(b bsr.BSR) (*Value, error) {
 		return &Value{Type: TypeTuple, Tuple: tuple}, nil
 
 	case 2: // Definition (recursive!)
-		def, err := ctx.buildDefinition(b.GetNTChildI(0))
+		def, err := ast.buildDefinition(b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
@@ -458,7 +535,7 @@ func (ctx *buildContext) buildValue(b bsr.BSR) (*Value, error) {
 }
 
 // Literal : boolean_literal | number_literal | string_literal | expr_literal.
-func (ctx *buildContext) buildLiteral(b bsr.BSR) (*Value, error) {
+func (ast *AST) buildLiteral(b bsr.BSR) (*Value, error) {
 	switch b.Alternate() {
 	case 0: // boolean_literal
 		return &Value{Type: TypeBoolean, Token: b.GetTChildI(0)}, nil
@@ -474,19 +551,6 @@ func (ctx *buildContext) buildLiteral(b bsr.BSR) (*Value, error) {
 
 	default:
 		return nil, ErrInvalidToken.With(slog.String("token", "Literal"))
-	}
-}
-
-// Print writes a formatted representation of the AST to the writer.
-func (ast *AST) Print(w io.Writer) {
-	ast.PrintIndent(w, 0)
-}
-
-// PrintIndent writes a formatted representation of the AST to the writer
-// with the specified indentation.
-func (ast *AST) PrintIndent(w io.Writer, indent int) {
-	for _, def := range ast.Definitions {
-		def.Print(w, indent)
 	}
 }
 
@@ -521,13 +585,13 @@ func (def *Definition) Print(w io.Writer, indent int) {
 func (t *Tuple) Print(w io.Writer, indent int) {
 	prefix := strings.Repeat("  ", indent)
 
-	if len(t.Aggregate) == 0 {
+	if len(t.Values) == 0 {
 		writer(w)("\n", prefix+"(empty)")
 
 		return
 	}
 
-	for _, val := range t.Aggregate {
+	for _, val := range t.Values {
 		val.Print(w, indent)
 	}
 }

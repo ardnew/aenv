@@ -10,6 +10,7 @@ tool (
 
 require (
 	github.com/alecthomas/kong v1.13.0
+	github.com/expr-lang/expr v1.17.7
 	github.com/goccmack/goutil v1.2.3
 	github.com/goccy/go-yaml v1.19.1
 	github.com/klauspost/readahead v1.4.0
