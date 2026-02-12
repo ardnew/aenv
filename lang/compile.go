@@ -191,12 +191,17 @@ func compileExpr(
 	// Check if there are any parameters in scope (typed as any(nil))
 	hasParams := scopesHaveParams(scopes)
 
+	// Check if any other namespace in scope has an expr value (typed as
+	// any(nil)). Exclude the value being compiled to avoid false positives.
+	hasExprValues := scopesHaveExprValues(scopes, v)
+
 	root.logger.TraceContext(
 		ctx,
 		"compile expr",
 		slog.String("source", source),
 		slog.Any("env_keys", sortedKeys(env)),
 		slog.Bool("has_params", hasParams),
+		slog.Bool("has_expr_values", hasExprValues),
 	)
 
 	patcher := &hyphenPatcher{
@@ -207,9 +212,9 @@ func compileExpr(
 
 	program, err := expr.Compile(source, expr.Env(env), expr.Patch(patcher))
 	if err != nil {
-		// If we have parameters, defer to lazy compilation at runtime
-		// when we'll know the actual parameter types
-		if hasParams {
+		// If we have parameters or expr-valued namespaces in scope,
+		// defer to lazy compilation at runtime when actual types are known
+		if hasParams || hasExprValues {
 			v.Program = nil
 
 			root.logger.TraceContext(
@@ -247,6 +252,22 @@ func scopesHaveParams(scopes []scope) bool {
 	for _, s := range scopes {
 		if len(s.params) > 0 {
 			return true
+		}
+	}
+
+	return false
+}
+
+// scopesHaveExprValues returns true if any namespace in scope (other than
+// the one identified by exclude) has an expr-typed value. These resolve to
+// nil at compile time (unknown type), requiring deferred lazy compilation
+// at evaluation time when actual values are available.
+func scopesHaveExprValues(scopes []scope, exclude *Value) bool {
+	for _, s := range scopes {
+		for _, ns := range s.ns {
+			if ns.Value != nil && ns.Value.Type == TypeExpr && ns.Value != exclude {
+				return true
+			}
 		}
 	}
 

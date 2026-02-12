@@ -143,8 +143,22 @@ func (ast *AST) EvaluateExpr(
 		source, expr.Env(compileEnv), expr.Patch(patcher),
 	)
 	if err != nil {
-		return nil, ErrExprCompile.Wrap(err).
-			With(slog.String("source", source))
+		// If the error is due to expr-valued namespaces in scope (unknown
+		// types at compile time), fall back to lazy compilation using the
+		// runtime environment where expr values are fully resolved.
+		topScopes := []scope{topScope}
+		if !scopesHaveExprValues(topScopes, nil) {
+			return nil, ErrExprCompile.Wrap(err).
+				With(slog.String("source", source))
+		}
+
+		logger.TraceContext(
+			ctx,
+			"eval expr deferred compile",
+			slog.String("source", source),
+		)
+
+		program = nil
 	}
 
 	// Build runtime environment with actual resolved values.
@@ -156,6 +170,24 @@ func (ast *AST) EvaluateExpr(
 		logger:     logger,
 	}
 	runtimeEnv := ectx.buildRuntimeEnv()
+
+	// If compilation was deferred, compile now with the runtime environment
+	// where expr-valued namespaces have been fully resolved.
+	if program == nil {
+		runtimePatcher := &hyphenPatcher{
+			namespaces: ast.Namespaces,
+			env:        runtimeEnv,
+			logger:     logger,
+		}
+
+		program, err = expr.Compile(
+			source, expr.Env(runtimeEnv), expr.Patch(runtimePatcher),
+		)
+		if err != nil {
+			return nil, ErrExprCompile.Wrap(err).
+				With(slog.String("source", source))
+		}
+	}
 
 	result, err := vm.Run(program, runtimeEnv)
 	if err != nil {
@@ -178,7 +210,8 @@ type evalContext struct {
 	ast        *AST
 	processEnv map[string]string
 	params     map[string]*Value
-	logger     log.Logger // structured logger for trace-level debugging
+	logger     log.Logger          // structured logger for trace-level debugging
+	resolving  map[*Value]struct{} // cycle detection for resolveForEnv
 }
 
 // evaluateValue recursively evaluates a Value to its Go representation.
@@ -433,6 +466,7 @@ func (ctx *evalContext) evaluateTuple(v *Value) (any, error) {
 			ast:        ctx.ast,
 			processEnv: ctx.processEnv,
 			params:     make(map[string]*Value),
+			resolving:  ctx.resolving,
 		}
 
 		// Copy parent params
@@ -527,6 +561,9 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 // makeNamespaceFunc creates a callable function for a namespace with
 // parameters.
 // This allows parameterized namespaces to be called from within expressions.
+// The returned closure creates a child evalContext that inherits the
+// resolving set from the parent, preventing infinite recursion when
+// evaluating cross-referencing expr-valued namespaces.
 func (ctx *evalContext) makeNamespaceFunc(
 	ns *Namespace,
 ) func(...any) (any, error) {
@@ -547,32 +584,31 @@ func (ctx *evalContext) makeNamespaceFunc(
 				)
 		}
 
-		// Convert args to string representations for EvaluateNamespace
-		strArgs := make([]string, len(args))
-		for i, arg := range args {
-			strArgs[i] = anyToArgString(arg)
+		// Build parameter bindings by converting args to Values
+		params := make(map[string]*Value, len(args))
+
+		for i, param := range ns.Parameters {
+			if param.Token != nil {
+				paramName := param.Token.LiteralString()
+				params[paramName] = ctx.ast.parseArgToValue(
+					ctx.get(), anyToArgString(args[i]),
+				)
+			}
 		}
 
-		// Convert processEnv map back to slice format for WithProcessEnv
-		envSlice := mapToEnvSlice(ctx.processEnv)
+		// Create a child evalContext that inherits the resolving set,
+		// preventing cycles when buildRuntimeEnv resolves expr values.
+		childCtx := &evalContext{
+			get:        ctx.get,
+			ast:        ctx.ast,
+			processEnv: ctx.processEnv,
+			params:     params,
+			logger:     ctx.logger,
+			resolving:  ctx.resolving,
+		}
 
-		return ctx.ast.EvaluateNamespace(
-			ctx.get(),
-			ns.Identifier.LiteralString(),
-			strArgs,
-			WithProcessEnv(envSlice),
-		)
+		return childCtx.evaluateValue(ns.Value)
 	}
-}
-
-// mapToEnvSlice converts a map[string]string to []string in KEY=VALUE format.
-func mapToEnvSlice(m map[string]string) []string {
-	result := make([]string, 0, len(m))
-	for k, v := range m {
-		result = append(result, k+"="+v)
-	}
-
-	return result
 }
 
 // anyToArgString converts a Go value to a string suitable for parseArgToValue.
@@ -686,8 +722,34 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 		return nil
 
 	case TypeExpr:
-		// Cannot evaluate expr during env building - return nil
-		return nil
+		// Evaluate the expr if not already resolving it (cycle detection).
+		// This allows non-cyclic expr references to be fully resolved in the
+		// runtime environment, while returning nil for cycles to prevent
+		// infinite recursion.
+		if ctx.resolving == nil {
+			ctx.resolving = make(map[*Value]struct{})
+		}
+
+		if _, cycling := ctx.resolving[v]; cycling {
+			return nil
+		}
+
+		ctx.resolving[v] = struct{}{}
+		defer delete(ctx.resolving, v)
+
+		result, err := ctx.evaluateValue(v)
+		if err != nil {
+			ctx.logger.TraceContext(
+				ctx.get(),
+				"resolveForEnv expr failed",
+				slog.String("source", v.ExprSource()),
+				slog.String("error", err.Error()),
+			)
+
+			return nil
+		}
+
+		return result
 
 	case TypeTuple:
 		if v.Tuple == nil {

@@ -731,3 +731,199 @@ func TestEvaluateExpr_HyphenatedMultiSegment(t *testing.T) {
 		t.Errorf("expected \"json\", got %v", result)
 	}
 }
+
+func TestResolveForEnv_ExprResolution(t *testing.T) {
+	// Test that non-cyclic expr-valued namespaces are resolved in the
+	// runtime environment of other expressions.
+
+	tests := []struct {
+		name     string
+		input    string
+		defName  string
+		args     []string
+		expected any
+	}{
+		{
+			name:     "expr_ref_non_cyclic",
+			input:    `a : {{ 10 + 5 }}; b : {{ a * 2 }}`,
+			defName:  "b",
+			args:     nil,
+			expected: int(30),
+		},
+		{
+			name:     "expr_ref_chain",
+			input:    `x : {{ 3 }}; y : {{ x + 1 }}; z : {{ y + 1 }}`,
+			defName:  "z",
+			args:     nil,
+			expected: int(5),
+		},
+		{
+			name:     "expr_ref_with_literal",
+			input:    `base : 100; computed : {{ base + 1 }}; result : {{ computed * 2 }}`,
+			defName:  "result",
+			args:     nil,
+			expected: int(202),
+		},
+		{
+			name:     "expr_ref_string_concat",
+			input:    `prefix : {{ "Hello" }}; greeting : {{ prefix + ", World!" }}`,
+			defName:  "greeting",
+			args:     nil,
+			expected: "Hello, World!",
+		},
+		{
+			name:     "expr_ref_in_tuple",
+			input:    `factor : {{ 10 }}; config : { scale : {{ factor * 3 }} }`,
+			defName:  "config",
+			args:     nil,
+			expected: map[string]any{"scale": int(30)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, err := ParseString(t.Context(), tt.input, WithCompileExprs(true))
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateNamespace(t.Context(), tt.defName, tt.args)
+			if err != nil {
+				t.Fatalf("evaluate error: %v", err)
+			}
+
+			switch expected := tt.expected.(type) {
+			case int:
+				switch got := result.(type) {
+				case int:
+					if got != expected {
+						t.Errorf("expected %v, got %v", expected, got)
+					}
+				case int64:
+					if got != int64(expected) {
+						t.Errorf("expected %v, got %v", expected, got)
+					}
+				default:
+					t.Errorf("expected int, got %T: %v", result, result)
+				}
+			case map[string]any:
+				got, ok := result.(map[string]any)
+				if !ok {
+					t.Fatalf("expected map, got %T: %v", result, result)
+				}
+
+				for k, v := range expected {
+					gotVal, exists := got[k]
+					if !exists {
+						t.Errorf("expected key %q in result", k)
+
+						continue
+					}
+
+					switch ev := v.(type) {
+					case int:
+						switch gv := gotVal.(type) {
+						case int:
+							if gv != ev {
+								t.Errorf("key %q: expected %v, got %v", k, ev, gv)
+							}
+						case int64:
+							if gv != int64(ev) {
+								t.Errorf("key %q: expected %v, got %v", k, ev, gv)
+							}
+						default:
+							t.Errorf("key %q: expected int, got %T: %v", k, gotVal, gotVal)
+						}
+					default:
+						if gotVal != v {
+							t.Errorf("key %q: expected %v, got %v", k, v, gotVal)
+						}
+					}
+				}
+			default:
+				if result != tt.expected {
+					t.Errorf("expected %v (%T), got %v (%T)",
+						tt.expected, tt.expected, result, result)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveForEnv_CycleDetection(t *testing.T) {
+	// Test that mutually-referencing expr namespaces don't cause infinite
+	// recursion. The cycle should be broken by returning nil for the
+	// back-edge.
+
+	tests := []struct {
+		name    string
+		input   string
+		defName string
+	}{
+		{
+			name:    "mutual_cycle",
+			input:   `a : {{ b }}; b : {{ a }}`,
+			defName: "a",
+		},
+		{
+			name:    "self_referencing",
+			input:   `x : {{ x + 1 }}`,
+			defName: "x",
+		},
+		{
+			name:    "indirect_cycle",
+			input:   `a : {{ b + 1 }}; b : {{ c + 1 }}; c : {{ a + 1 }}`,
+			defName: "a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, err := ParseString(t.Context(), tt.input, WithCompileExprs(true))
+			if err != nil {
+				// Compile-time error is an acceptable outcome for cycles:
+				// the type checker may reject the expression before runtime
+				// cycle detection can engage.
+				t.Logf("compile-time error (acceptable): %v", err)
+
+				return
+			}
+
+			_, err = ast.EvaluateNamespace(t.Context(), tt.defName, nil)
+			if err != nil {
+				t.Logf("runtime error (acceptable): %v", err)
+			} else {
+				// Cyclic expr resolution produces nil for the back-edge,
+				// which may propagate as a result. This is acceptable
+				// as long as we don't hang or stack overflow.
+				t.Log("cycle resolved without error (nil propagated)")
+			}
+			// The key assertion: we reached this point without hanging
+			// or panicking due to infinite recursion.
+		})
+	}
+}
+
+func TestEvaluateExpr_CrossNamespaceExpr(t *testing.T) {
+	// Test that EvaluateExpr can reference expr-valued namespaces.
+	input := `base : {{ 21 }}`
+
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateExpr(t.Context(), "base * 2")
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	switch v := result.(type) {
+	case int, int64:
+		if v != 42 {
+			t.Errorf("expected 42, got %v", v)
+		}
+	default:
+		t.Errorf("expected int, got %T: %v", result, result)
+	}
+}
