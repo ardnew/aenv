@@ -100,7 +100,7 @@ func (f *logConfig) start(ctx context.Context) func() {
 		)
 		if err != nil {
 			// Exit with error - don't continue with stderr
-			log.ErrorContext(ctx, "failed to open log output file",
+			log.ErrorContext(ctx, "open log output file",
 				slog.String("path", path),
 				slog.String("error", err.Error()),
 			)

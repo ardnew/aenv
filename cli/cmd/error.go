@@ -77,8 +77,8 @@ func (e *Error) With(attrs ...slog.Attr) *Error {
 }
 
 var (
-	ErrJSONMarshal = NewError("JSON marshal error")
-	ErrYAMLMarshal = NewError("YAML marshal error")
-	ErrWriteConfig = NewError("failed to write configuration file")
-	ErrFileExists  = NewError("file already exists (use --force to overwrite)")
+	ErrJSONMarshal = NewError("marshal JSON")
+	ErrYAMLMarshal = NewError("marshal YAML")
+	ErrWriteConfig = NewError("write configuration file")
+	ErrFileExists  = NewError("file exists (use --force to overwrite)")
 )

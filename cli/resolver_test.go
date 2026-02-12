@@ -318,8 +318,8 @@ func TestGetOrParseConfig_ReadError(t *testing.T) {
 	if err == nil {
 		t.Error("expected read error")
 	}
-	if !strings.Contains(err.Error(), "failed to read input") {
-		t.Errorf("expected 'failed to read input' error, got: %v", err)
+	if !strings.Contains(err.Error(), "read input") {
+		t.Errorf("expected 'read input' error, got: %v", err)
 	}
 }
 
