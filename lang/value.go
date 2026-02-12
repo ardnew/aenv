@@ -57,15 +57,15 @@ func NewTuple(values ...*Value) *Value {
 	}
 }
 
-// NewDefinition creates a definition [Value].
-func NewDefinition(
+// NewNamespace creates a namespace [Value].
+func NewNamespace(
 	identifier string,
 	params []*Value,
 	value *Value,
 ) *Value {
 	return &Value{
-		Type: TypeDefinition,
-		Definition: &Definition{
+		Type: TypeNamespace,
+		Namespace: &Namespace{
 			Identifier: newToken("identifier", identifier),
 			Parameters: params,
 			Value:      value,

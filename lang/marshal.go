@@ -13,20 +13,20 @@ func (ast *AST) MarshalJSON() ([]byte, error) {
 
 // ToMap converts the AST to a native Go map structure.
 func (ast *AST) ToMap() map[string]any {
-	// Convert to a map where each definition name is a key
+	// Convert to a map where each namespace name is a key
 	result := make(map[string]any)
 
-	for _, def := range ast.Definitions {
-		name := def.Identifier.LiteralString()
+	for _, ns := range ast.Namespaces {
+		name := ns.Identifier.LiteralString()
 
 		// If there are parameters, add them alongside the value
-		if len(def.Parameters) > 0 {
-			params := make([]any, len(def.Parameters))
-			for i, param := range def.Parameters {
+		if len(ns.Parameters) > 0 {
+			params := make([]any, len(ns.Parameters))
+			for i, param := range ns.Parameters {
 				params[i] = param.ToNative()
 			}
 
-			value := def.Value.ToNative()
+			value := ns.Value.ToNative()
 
 			// If the value is a map, flatten it into the same object as (parameters)
 			if valueMap, ok := value.(map[string]any); ok {
@@ -45,7 +45,7 @@ func (ast *AST) ToMap() map[string]any {
 			}
 		} else {
 			// No parameters: output value directly
-			result[name] = def.Value.ToNative()
+			result[name] = ns.Value.ToNative()
 		}
 	}
 
@@ -127,39 +127,39 @@ func (v *Value) ToNative() any {
 			return nil
 		}
 
-		// Check if all elements are Definitions - if so, return as an object
-		allDefs := true
+		// Check if all elements are Namespaces - if so, return as an object
+		allNamespaces := true
 
 		for _, val := range v.Tuple.Values {
-			if val.Type != TypeDefinition {
-				allDefs = false
+			if val.Type != TypeNamespace {
+				allNamespaces = false
 
 				break
 			}
 		}
 
-		if allDefs && len(v.Tuple.Values) > 0 {
-			// Return as object with definition names as keys
+		if allNamespaces && len(v.Tuple.Values) > 0 {
+			// Return as object with namespace names as keys
 			result := make(map[string]any)
 
 			for _, val := range v.Tuple.Values {
-				if val.Definition != nil {
-					name := val.Definition.Identifier.LiteralString()
-					// If definition has parameters, wrap with (parameters)
-					if len(val.Definition.Parameters) > 0 {
+				if val.Namespace != nil {
+					name := val.Namespace.Identifier.LiteralString()
+					// If namespace has parameters, wrap with (parameters)
+					if len(val.Namespace.Parameters) > 0 {
 						defData := make(map[string]any)
 
-						params := make([]any, len(val.Definition.Parameters))
-						for i, param := range val.Definition.Parameters {
+						params := make([]any, len(val.Namespace.Parameters))
+						for i, param := range val.Namespace.Parameters {
 							params[i] = param.ToNative()
 						}
 
 						defData["(parameters)"] = params
-						defData["(value)"] = val.Definition.Value.ToNative()
+						defData["(value)"] = val.Namespace.Value.ToNative()
 						result[name] = defData
 					} else {
 						// No parameters: just use the value
-						result[name] = val.Definition.Value.ToNative()
+						result[name] = val.Namespace.Value.ToNative()
 					}
 				}
 			}
@@ -175,29 +175,29 @@ func (v *Value) ToNative() any {
 
 		return result
 
-	case TypeDefinition:
-		if v.Definition == nil {
+	case TypeNamespace:
+		if v.Namespace == nil {
 			return nil
 		}
-		// Represent definition as a simple object {name: value}
+		// Represent namespace as a simple object {name: value}
 		result := make(map[string]any)
-		name := v.Definition.Identifier.LiteralString()
+		name := v.Namespace.Identifier.LiteralString()
 
-		// If definition has parameters, wrap with (parameters)
-		if len(v.Definition.Parameters) > 0 {
+		// If namespace has parameters, wrap with (parameters)
+		if len(v.Namespace.Parameters) > 0 {
 			defData := make(map[string]any)
 
-			params := make([]any, len(v.Definition.Parameters))
-			for i, param := range v.Definition.Parameters {
+			params := make([]any, len(v.Namespace.Parameters))
+			for i, param := range v.Namespace.Parameters {
 				params[i] = param.ToNative()
 			}
 
 			defData["(parameters)"] = params
-			defData["(value)"] = v.Definition.Value.ToNative()
+			defData["(value)"] = v.Namespace.Value.ToNative()
 			result[name] = defData
 		} else {
 			// No parameters: simple key-value
-			result[name] = v.Definition.Value.ToNative()
+			result[name] = v.Namespace.Value.ToNative()
 		}
 
 		return result

@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+// withSourceFile creates a context with a single source file for testing.
+func withSourceFile(t *testing.T, path string) context.Context {
+	t.Helper()
+
+	return WithSourceFiles(context.Background(), []string{path})
+}
+
+// withStdin creates a context configured to read from stdin for testing.
+func withStdin(t *testing.T) context.Context {
+	t.Helper()
+
+	return WithSourceFiles(context.Background(), []string{"-"})
+}
+
 // TestNativeFmtValidSyntax tests that valid syntax is formatted correctly.
 func TestNativeFmtValidSyntax(t *testing.T) {
 	tests := []struct {
@@ -53,13 +67,11 @@ func TestNativeFmtValidSyntax(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Run the command
-			native := &Native{
-				Indent: 2,
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			native := &Native{Indent: 2}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = native.Run(context.Background())
+			err = native.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Native.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -118,13 +130,11 @@ func TestNativeFmtInvalidSyntax(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Run the command
-			native := &Native{
-				Indent: 2,
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			native := &Native{Indent: 2}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = native.Run(context.Background())
+			err = native.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Native.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -175,13 +185,11 @@ func TestNativeFmtStdin(t *testing.T) {
 				io.WriteString(w, tt.input)
 			}()
 
-			// Run the command
-			native := &Native{
-				Indent: 2,
-				Source: "-",
-			}
+			// Run the command with stdin source
+			native := &Native{Indent: 2}
+			ctx := withStdin(t)
 
-			err = native.Run(context.Background())
+			err = native.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Native.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -225,13 +233,11 @@ func TestJSONFmtInvalidSyntax(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Run the command
-			json := &JSON{
-				Indent: 2,
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			json := &JSON{Indent: 2}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = json.Run(context.Background())
+			err = json.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("JSON.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -275,13 +281,11 @@ func TestYAMLFmtInvalidSyntax(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Run the command
-			yaml := &YAML{
-				Indent: 2,
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			yaml := &YAML{Indent: 2}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = yaml.Run(context.Background())
+			err = yaml.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("YAML.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -325,12 +329,11 @@ func TestASTFmtInvalidSyntax(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Run the command
-			ast := &AST{
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			ast := &AST{}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = ast.Run(context.Background())
+			err = ast.Run(ctx)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("AST.Run() error = %v, wantErr %v", err, tt.wantErr)
@@ -405,13 +408,11 @@ func TestFormatASTOutput(t *testing.T) {
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			// Run the command
-			native := &Native{
-				Indent: tt.indent,
-				Source: tmpfile.Name(),
-			}
+			// Run the command with context-based source
+			native := &Native{Indent: tt.indent}
+			ctx := withSourceFile(t, tmpfile.Name())
 
-			err = native.Run(context.Background())
+			err = native.Run(ctx)
 
 			// Restore stdout
 			w.Close()

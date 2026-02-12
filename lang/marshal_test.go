@@ -11,7 +11,7 @@ import (
 func TestAST_MarshalJSON(t *testing.T) {
 	input := `test : { foo : 123, bar : "abc" }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestAST_MarshalJSON(t *testing.T) {
 func TestAST_MarshalJSON_WithArguments(t *testing.T) {
 	input := `test region env : { foo : true }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestAST_MarshalJSON_WithArguments(t *testing.T) {
 func TestAST_MarshalJSON_WithList(t *testing.T) {
 	input := `test : { items : {1, 2, 3} }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestAST_MarshalJSON_WithList(t *testing.T) {
 func TestAST_MarshalJSON_WithNestedTuple(t *testing.T) {
 	input := `test : { config : { port : 8080 } }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestAST_MarshalJSON_WithNestedTuple(t *testing.T) {
 func TestAST_MarshalYAML(t *testing.T) {
 	input := `test : { foo : 123, bar : "abc" }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestAST_MarshalYAML(t *testing.T) {
 func TestAST_MarshalYAML_WithArguments(t *testing.T) {
 	input := `test region env : { greeting : "hello" }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestAST_MarshalYAML_WithArguments(t *testing.T) {
 func TestAST_MarshalYAML_WithList(t *testing.T) {
 	input := `test : { items : {1, 2, 3} }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestAST_MarshalYAML_WithList(t *testing.T) {
 func TestAST_MarshalYAML_WithNestedTuple(t *testing.T) {
 	input := `test : { config : { port : 8080 } }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}

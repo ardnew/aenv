@@ -1,17 +1,32 @@
 # Grammar
 
-This file serves as both definition and documentation for the language used by [`aenv`](https://github.com/ardnew/aenv).
+This file serves as both specification and documentation for the language used by [`aenv`](https://github.com/ardnew/aenv):
 
-1. [Lexical grammar](#lexical-grammar) — defines the first-class tokens emitted by the lexer.
-2. [Syntactic grammar](#syntactic-grammar) — defines how tokens are combined to form semantics.
-
-```ebnf
+```go
 
 package "github.com/ardnew/aenv/lang"
 
 ```
 
-## Lexical Grammar
+1. [Introduction](#introduction) — describes the purpose and general characteristics of this language.
+2. [Lexicon](#lexicon) — defines all first-class tokens emitted by the lexer.
+3. [Syntax](#syntax) — defines how tokens are combined into meaningful data structures by the parser.
+
+## Introduction
+
+This language is designed to generate static environment variable definitions.
+
+Environment variables are grouped into **namespaces**. Invoking a namespace produces the value of that namespace.
+
+Identifiers placed between the namespace identifier and the value are called **parameters**. Parammeters are bound to the arguments provided when invoking the namespace.
+
+### Terminology
+
+- **Namespace**: The complete structure consisting of an identifier, optional parameters, and a value (e.g., `config x y : { ... }`).
+- **Namespace identifier**: The identifier token that names the namespace (e.g., `config` in the example above).
+- **Parameter**: An optional identifier token that modifies the behavior of a namespace (e.g., `x` and `y` in the example above).
+
+## Lexicon
 
 All input is consumed in units of UTF-8 code points. The grammar defined in this document describes how code point sequences construct tokens — first-class syntactical elements.
 
@@ -53,12 +68,15 @@ boolean_literal
 
 number_literal
   : [ '-' ] (
-      any "123456789" { number } [ '.' { number } ]
+      (
+        any "123456789" { number } [ '.' { number } ] |
+        [ any "123456789" { number } ] '.' { number }
+      )
         [ any "eE" [ any"+-" ] < number > ] |
       '0' {
         '.' { number }
           [ any "eE" [ any"+-" ] < number > ] |
-        < any "01234567" > |
+        [ 'o' ] < any "01234567" > |
         'x' < any "0123456789abcdefABCDEF" > |
         'b' < any "01" >
       }
@@ -100,9 +118,7 @@ op_define
 
 ```
 
----
-
-## Syntactic Grammar
+## Syntax
 
 The following rules combine lexer tokens into meaningful data structures.
 
@@ -111,16 +127,16 @@ Syntactical rules support `empty` productions, alternation, and recursion, but n
 ```ebnf
 
 Manifest
-  : Definitions
+  : Namespaces
   ;
 
-Definitions
-  : Definition Definitions
-  | Definition separator Definitions
+Namespaces
+  : Namespace Namespaces
+  | Namespace separator Namespaces
   | empty
   ;
 
-Definition
+Namespace
   : identifier Parameters op_define Value
   ;
 
@@ -132,7 +148,7 @@ Parameters
 Value
   : Literal
   | Tuple
-  | Definition
+  | Namespace
   | identifier
   ;
 

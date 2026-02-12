@@ -625,34 +625,34 @@ func TestParser_ErrorCases(t *testing.T) {
 func TestParseString_SimpleDefinition(t *testing.T) {
 	input := `test : { foo : 123 }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	if len(ast.Definitions) != 1 {
-		t.Fatalf("expected 1 definition, got %d", len(ast.Definitions))
+	if len(ast.Namespaces) != 1 {
+		t.Fatalf("expected 1 namespace, got %d", len(ast.Namespaces))
 	}
 
-	def := ast.Definitions[0]
-	if def.Identifier.LiteralString() != "test" {
-		t.Errorf("expected definition 'test', got %q", def.Identifier.LiteralString())
+	ns := ast.Namespaces[0]
+	if ns.Identifier.LiteralString() != "test" {
+		t.Errorf("expected namespace 'test', got %q", ns.Identifier.LiteralString())
 	}
 
-	if def.Value.Type != TypeTuple {
-		t.Fatalf("expected tuple value, got %s", def.Value.Type)
+	if ns.Value.Type != TypeTuple {
+		t.Fatalf("expected tuple value, got %s", ns.Value.Type)
 	}
-	if len(def.Value.Tuple.Values) != 1 {
-		t.Fatalf("expected 1 member, got %d", len(def.Value.Tuple.Values))
-	}
-
-	value := def.Value.Tuple.Values[0]
-
-	if value.Type != TypeDefinition {
-		t.Fatalf("expected member to be Definition, got %v", value.Type)
+	if len(ns.Value.Tuple.Values) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(ns.Value.Tuple.Values))
 	}
 
-	inner := value.Definition
+	value := ns.Value.Tuple.Values[0]
+
+	if value.Type != TypeNamespace {
+		t.Fatalf("expected member to be Namespace, got %v", value.Type)
+	}
+
+	inner := value.Namespace
 
 	if inner.Identifier.LiteralString() != "foo" {
 		t.Errorf("expected member 'foo', got %q", inner.Identifier.LiteralString())
@@ -670,21 +670,21 @@ func TestParseString_MultipleDefinitions(t *testing.T) {
 		ns2 : { b : 2 }
 	`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	if len(ast.Definitions) != 2 {
-		t.Fatalf("expected 2 definitions, got %d", len(ast.Definitions))
+	if len(ast.Namespaces) != 2 {
+		t.Fatalf("expected 2 namespaces, got %d", len(ast.Namespaces))
 	}
 
-	if ast.Definitions[0].Identifier.LiteralString() != "ns1" {
-		t.Errorf("expected first definition 'ns1', got %q", ast.Definitions[0].Identifier.LiteralString())
+	if ast.Namespaces[0].Identifier.LiteralString() != "ns1" {
+		t.Errorf("expected first namespace 'ns1', got %q", ast.Namespaces[0].Identifier.LiteralString())
 	}
 
-	if ast.Definitions[1].Identifier.LiteralString() != "ns2" {
-		t.Errorf("expected second definition 'ns2', got %q", ast.Definitions[1].Identifier.LiteralString())
+	if ast.Namespaces[1].Identifier.LiteralString() != "ns2" {
+		t.Errorf("expected second namespace 'ns2', got %q", ast.Namespaces[1].Identifier.LiteralString())
 	}
 }
 
@@ -692,29 +692,29 @@ func TestParseString_MultipleDefinitions(t *testing.T) {
 func TestParseString_DefinitionWithParameters(t *testing.T) {
 	input := `test arg1 arg2 : { }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
+	ns := ast.Namespaces[0]
 
-	if len(def.Parameters) != 2 {
-		t.Fatalf("expected 2 parameters, got %d", len(def.Parameters))
-	}
-
-	if def.Parameters[0].Type != TypeIdentifier {
-		t.Errorf("expected first parameter to be Identifier, got %v", def.Parameters[0].Type)
-	}
-	if def.Parameters[0].Token.LiteralString() != "arg1" {
-		t.Errorf("expected first parameter 'arg1', got %q", def.Parameters[0].Token.LiteralString())
+	if len(ns.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(ns.Parameters))
 	}
 
-	if def.Parameters[1].Type != TypeIdentifier {
-		t.Errorf("expected second parameter to be Identifier, got %v", def.Parameters[1].Type)
+	if ns.Parameters[0].Type != TypeIdentifier {
+		t.Errorf("expected first parameter to be Identifier, got %v", ns.Parameters[0].Type)
 	}
-	if def.Parameters[1].Token.LiteralString() != "arg2" {
-		t.Errorf("expected second parameter 'arg2', got %q", def.Parameters[1].Token.LiteralString())
+	if ns.Parameters[0].Token.LiteralString() != "arg1" {
+		t.Errorf("expected first parameter 'arg1', got %q", ns.Parameters[0].Token.LiteralString())
+	}
+
+	if ns.Parameters[1].Type != TypeIdentifier {
+		t.Errorf("expected second parameter to be Identifier, got %v", ns.Parameters[1].Type)
+	}
+	if ns.Parameters[1].Token.LiteralString() != "arg2" {
+		t.Errorf("expected second parameter 'arg2', got %q", ns.Parameters[1].Token.LiteralString())
 	}
 }
 
@@ -730,16 +730,16 @@ func TestParseString_AllValueTypes(t *testing.T) {
 		def p1 : nested p2 : { value : 99 },
 	}`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	if def.Value.Type != TypeTuple {
-		t.Fatalf("expected tuple value, got %s", def.Value.Type)
+	ns := ast.Namespaces[0]
+	if ns.Value.Type != TypeTuple {
+		t.Fatalf("expected tuple value, got %s", ns.Value.Type)
 	}
-	values := def.Value.Tuple.Values
+	values := ns.Value.Tuple.Values
 
 	if len(values) != 7 {
 		t.Fatalf("expected 7 values, got %d", len(values))
@@ -756,17 +756,17 @@ func TestParseString_AllValueTypes(t *testing.T) {
 		{"code", nil, TypeExpr},
 		{"bool", nil, TypeBoolean},
 		{"tuple", nil, TypeTuple},
-		{"def", []Type{TypeIdentifier}, TypeDefinition},
+		{"def", []Type{TypeIdentifier}, TypeNamespace},
 	}
 
 	for i, tt := range tests {
-		// Every Value in test is a Definition
-		if values[i].Type != TypeDefinition {
-			t.Errorf("expected member %q to be Definition, got %v", tt.name, values[i].Type)
+		// Every Value in test is a Namespace
+		if values[i].Type != TypeNamespace {
+			t.Errorf("expected member %q to be Namespace, got %v", tt.name, values[i].Type)
 			continue
 		}
 
-		inner := values[i].Definition
+		inner := values[i].Namespace
 
 		if inner.Value.Type != tt.innerType {
 			t.Errorf("expected member %q inner type %v, got %v", tt.name, tt.innerType, inner.Value.Type)
@@ -791,21 +791,21 @@ func TestParseString_AllValueTypes(t *testing.T) {
 func TestAST_Print(t *testing.T) {
 	input := `test : { foo : 123 }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
 	var buf bytes.Buffer
-	ast.Print(&buf)
+	ast.Print(t.Context(), &buf)
 
 	output := buf.String()
-	if !strings.Contains(output, "Definition: test") {
-		t.Errorf("output doesn't contain definition name: %s", output)
+	if !strings.Contains(output, "Namespace: test") {
+		t.Errorf("output doesn't contain namespace name: %s", output)
 	}
-	// Tuples contain Values which can be Definitions (shown as nested)
-	if !strings.Contains(output, "Definition: foo") {
-		t.Errorf("output doesn't contain nested definition: %s", output)
+	// Tuples contain Values which can be Namespaces (shown as nested)
+	if !strings.Contains(output, "Namespace: foo") {
+		t.Errorf("output doesn't contain nested namespace: %s", output)
 	}
 	if !strings.Contains(output, "Number: 123") {
 		t.Errorf("output doesn't contain value: %s", output)
@@ -816,43 +816,43 @@ func TestAST_Print(t *testing.T) {
 func TestParseString_RecursiveDefinition(t *testing.T) {
 	input := `test : { nested : inner arg : { value : 42 } }`
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	if len(ast.Definitions) != 1 {
-		t.Fatalf("expected 1 definition, got %d", len(ast.Definitions))
+	if len(ast.Namespaces) != 1 {
+		t.Fatalf("expected 1 namespace, got %d", len(ast.Namespaces))
 	}
 
-	def := ast.Definitions[0]
-	if def.Value.Type != TypeTuple {
-		t.Fatalf("expected tuple value, got %s", def.Value.Type)
+	ns := ast.Namespaces[0]
+	if ns.Value.Type != TypeTuple {
+		t.Fatalf("expected tuple value, got %s", ns.Value.Type)
 	}
-	if len(def.Value.Tuple.Values) != 1 {
-		t.Fatalf("expected 1 member, got %d", len(def.Value.Tuple.Values))
+	if len(ns.Value.Tuple.Values) != 1 {
+		t.Fatalf("expected 1 member, got %d", len(ns.Value.Tuple.Values))
 	}
 
-	value := def.Value.Tuple.Values[0]
+	value := ns.Value.Tuple.Values[0]
 
-	if value.Type != TypeDefinition {
+	if value.Type != TypeNamespace {
 		t.Fatalf("expected Definition value type, got %v", value.Type)
 	}
 
-	nested := value.Definition
+	nested := value.Namespace
 
 	if nested.Identifier.LiteralString() != "nested" {
 		t.Errorf("expected value 'nested', got %q", nested.Identifier.LiteralString())
 	}
 
-	if nested.Value.Type != TypeDefinition {
-		t.Fatalf("expected nested value to be Definition, got %v", nested.Value.Type)
+	if nested.Value.Type != TypeNamespace {
+		t.Fatalf("expected nested value to be Namespace, got %v", nested.Value.Type)
 	}
 
-	inner := nested.Value.Definition
+	inner := nested.Value.Namespace
 
 	if inner.Identifier.LiteralString() != "inner" {
-		t.Errorf("expected inner definition 'inner', got %q", inner.Identifier.LiteralString())
+		t.Errorf("expected inner namespace 'inner', got %q", inner.Identifier.LiteralString())
 	}
 
 	if len(inner.Parameters) != 1 {
@@ -872,13 +872,13 @@ func TestParseString_RecursiveDefinition(t *testing.T) {
 func TestParseString_EmptyInput(t *testing.T) {
 	input := ``
 
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	if len(ast.Definitions) != 0 {
-		t.Errorf("expected 0 definitions for empty input, got %d", len(ast.Definitions))
+	if len(ast.Namespaces) != 0 {
+		t.Errorf("expected 0 namespaces for empty input, got %d", len(ast.Namespaces))
 	}
 }
 
@@ -896,7 +896,7 @@ func TestParseString_InvalidInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseString(tt.input)
+			_, err := ParseString(t.Context(), tt.input)
 			if err == nil {
 				t.Errorf("expected error for input %q, got nil", tt.input)
 			}
@@ -1097,24 +1097,24 @@ func TestNewTuple(t *testing.T) {
 	})
 }
 
-// TestNewDefinition tests the NewDefinition value constructor.
-func TestNewDefinition(t *testing.T) {
+// TestNewNamespace tests the NewNamespace value constructor.
+func TestNewNamespace(t *testing.T) {
 	t.Run("simple definition", func(t *testing.T) {
-		v := NewDefinition("key", nil, NewString("value"))
-		if v.Type != TypeDefinition {
-			t.Errorf("expected TypeDefinition, got %v", v.Type)
+		v := NewNamespace("key", nil, NewString("value"))
+		if v.Type != TypeNamespace {
+			t.Errorf("expected TypeNamespace, got %v", v.Type)
 		}
-		if v.Definition == nil {
-			t.Fatal("expected non-nil definition")
+		if v.Namespace == nil {
+			t.Fatal("expected non-nil namespace")
 		}
-		if v.Definition.Identifier.LiteralString() != "key" {
-			t.Errorf("expected identifier 'key', got %q", v.Definition.Identifier.LiteralString())
+		if v.Namespace.Identifier.LiteralString() != "key" {
+			t.Errorf("expected identifier 'key', got %q", v.Namespace.Identifier.LiteralString())
 		}
-		if len(v.Definition.Parameters) != 0 {
-			t.Errorf("expected 0 parameters, got %d", len(v.Definition.Parameters))
+		if len(v.Namespace.Parameters) != 0 {
+			t.Errorf("expected 0 parameters, got %d", len(v.Namespace.Parameters))
 		}
-		if v.Definition.Value.Type != TypeString {
-			t.Errorf("expected value type TypeString, got %v", v.Definition.Value.Type)
+		if v.Namespace.Value.Type != TypeString {
+			t.Errorf("expected value type TypeString, got %v", v.Namespace.Value.Type)
 		}
 	})
 
@@ -1123,20 +1123,20 @@ func TestNewDefinition(t *testing.T) {
 			NewIdentifier("arg1"),
 			NewIdentifier("arg2"),
 		}
-		v := NewDefinition("func", params, NewExpr("{{ arg1 + arg2 }}"))
-		if len(v.Definition.Parameters) != 2 {
-			t.Errorf("expected 2 parameters, got %d", len(v.Definition.Parameters))
+		v := NewNamespace("func", params, NewExpr("{{ arg1 + arg2 }}"))
+		if len(v.Namespace.Parameters) != 2 {
+			t.Errorf("expected 2 parameters, got %d", len(v.Namespace.Parameters))
 		}
 	})
 
 	t.Run("nested definition", func(t *testing.T) {
-		inner := NewDefinition("inner", nil, NewNumber("42"))
-		outer := NewDefinition("outer", nil, NewTuple(inner))
-		if outer.Definition.Value.Type != TypeTuple {
+		inner := NewNamespace("inner", nil, NewNumber("42"))
+		outer := NewNamespace("outer", nil, NewTuple(inner))
+		if outer.Namespace.Value.Type != TypeTuple {
 			t.Errorf("expected outer value to be TypeTuple")
 		}
-		if outer.Definition.Value.Tuple.Values[0].Type != TypeDefinition {
-			t.Errorf("expected tuple to contain TypeDefinition")
+		if outer.Namespace.Value.Tuple.Values[0].Type != TypeNamespace {
+			t.Errorf("expected tuple to contain TypeNamespace")
 		}
 	})
 }

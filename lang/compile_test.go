@@ -7,23 +7,23 @@ import (
 func TestCompileExprs_NeighborReference(t *testing.T) {
 	input := `test : { x : 10, y : {{ x + 1 }} }`
 
-	ast, err := ParseString(input, WithCompileExprs(true))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
+	def := ast.Namespaces[0]
 	if def.Value.Type != TypeTuple {
 		t.Fatalf("expected tuple, got %s", def.Value.Type)
 	}
 
 	// y is the second definition in the tuple
 	yDef := def.Value.Tuple.Values[1]
-	if yDef.Type != TypeDefinition {
+	if yDef.Type != TypeNamespace {
 		t.Fatalf("expected definition, got %s", yDef.Type)
 	}
 
-	yVal := yDef.Definition.Value
+	yVal := yDef.Namespace.Value
 	if yVal.Type != TypeExpr {
 		t.Fatalf("expected expr, got %s", yVal.Type)
 	}
@@ -36,14 +36,14 @@ func TestCompileExprs_NeighborReference(t *testing.T) {
 func TestCompileExprs_AncestorReference(t *testing.T) {
 	input := `root : { x : 10, inner : { y : {{ x }} } }`
 
-	ast, err := ParseString(input, WithCompileExprs(true))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	inner := def.Value.Tuple.Values[1].Definition
-	yDef := inner.Value.Tuple.Values[0].Definition
+	def := ast.Namespaces[0]
+	inner := def.Value.Tuple.Values[1].Namespace
+	yDef := inner.Value.Tuple.Values[0].Namespace
 	yVal := yDef.Value
 
 	if yVal.Type != TypeExpr {
@@ -58,13 +58,13 @@ func TestCompileExprs_AncestorReference(t *testing.T) {
 func TestCompileExprs_ParameterInEnv(t *testing.T) {
 	input := `test region : { host : {{ region }} }`
 
-	ast, err := ParseString(input, WithCompileExprs(true))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	hostDef := def.Value.Tuple.Values[0].Definition
+	def := ast.Namespaces[0]
+	hostDef := def.Value.Tuple.Values[0].Namespace
 	hostVal := hostDef.Value
 
 	if hostVal.Type != TypeExpr {
@@ -79,13 +79,13 @@ func TestCompileExprs_ParameterInEnv(t *testing.T) {
 func TestCompileExprs_EnvFunction(t *testing.T) {
 	input := `test : { home : {{ env("HOME") }} }`
 
-	ast, err := ParseString(input, WithCompileExprs(true), WithProcessEnv([]string{"HOME=/home/testuser"}))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true), WithProcessEnv([]string{"HOME=/home/testuser"}))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	homeDef := def.Value.Tuple.Values[0].Definition
+	def := ast.Namespaces[0]
+	homeDef := def.Value.Tuple.Values[0].Namespace
 	homeVal := homeDef.Value
 
 	if homeVal.Type != TypeExpr {
@@ -100,7 +100,7 @@ func TestCompileExprs_EnvFunction(t *testing.T) {
 func TestCompileExprs_CompileError(t *testing.T) {
 	input := `test : { x : {{ +++ invalid }} }`
 
-	_, err := ParseString(input, WithCompileExprs(true))
+	_, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err == nil {
 		t.Fatal("expected compile error, got nil")
 	}
@@ -110,13 +110,13 @@ func TestCompileExprs_Disabled(t *testing.T) {
 	input := `test : { x : {{ 1 + 2 }} }`
 
 	// Default options do not compile expressions
-	ast, err := ParseString(input)
+	ast, err := ParseString(t.Context(), input)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	xDef := def.Value.Tuple.Values[0].Definition
+	def := ast.Namespaces[0]
+	xDef := def.Value.Tuple.Values[0].Namespace
 	xVal := xDef.Value
 
 	if xVal.Type != TypeExpr {
@@ -131,13 +131,13 @@ func TestCompileExprs_Disabled(t *testing.T) {
 func TestCompileExprs_EmptyExpr(t *testing.T) {
 	input := `test : { x : {{}} }`
 
-	ast, err := ParseString(input, WithCompileExprs(true))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
-	xDef := def.Value.Tuple.Values[0].Definition
+	def := ast.Namespaces[0]
+	xDef := def.Value.Tuple.Values[0].Namespace
 	xVal := xDef.Value
 
 	if xVal.Type != TypeExpr {
@@ -158,33 +158,33 @@ func TestCompileExprs_MultipleExprs(t *testing.T) {
 		d : {{ a + 2 }},
 	}`
 
-	ast, err := ParseString(input, WithCompileExprs(true))
+	ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	def := ast.Definitions[0]
+	def := ast.Namespaces[0]
 	values := def.Value.Tuple.Values
 
 	// b (index 1) should have compiled program
-	bVal := values[1].Definition.Value
+	bVal := values[1].Namespace.Value
 	if bVal.Program == nil {
 		t.Error("expected compiled program for 'b'")
 	}
 
 	// d (index 3) should have compiled program
-	dVal := values[3].Definition.Value
+	dVal := values[3].Namespace.Value
 	if dVal.Program == nil {
 		t.Error("expected compiled program for 'd'")
 	}
 
 	// a (index 0) and c (index 2) should NOT have programs
-	aVal := values[0].Definition.Value
+	aVal := values[0].Namespace.Value
 	if aVal.Program != nil {
 		t.Error("expected nil program for number 'a'")
 	}
 
-	cVal := values[2].Definition.Value
+	cVal := values[2].Namespace.Value
 	if cVal.Program != nil {
 		t.Error("expected nil program for string 'c'")
 	}

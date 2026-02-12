@@ -188,7 +188,8 @@ func (h *prettyTextHandler) writeValue(buf *bytes.Buffer, v slog.Value) {
 				buf.WriteString(colorBlue)
 			}
 
-			buf.WriteString(level.String())
+			// Use custom Level.String() to show "trace" instead of "DEBUG-4"
+			buf.WriteString(Level(level).String())
 			buf.WriteString(colorReset)
 		} else {
 			// Fallback for other Any types
@@ -243,7 +244,8 @@ func (h *prettyJSONHandler) Handle(_ context.Context, r slog.Record) error {
 		)
 	}
 
-	h.writeJSONField(buf, slog.LevelKey, r.Level.String(), &first)
+	// Use custom Level.String() to show "trace" instead of "DEBUG-4"
+	h.writeJSONField(buf, slog.LevelKey, Level(r.Level).String(), &first)
 
 	// Write source if configured
 	if h.opts.AddSource {

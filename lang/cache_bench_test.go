@@ -2,7 +2,6 @@ package lang
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,38 +15,38 @@ database : { host : "localhost", port : 5432 }
 cache : { enabled : true, ttl : 3600 }
 `
 
-	ast, err := ParseString(source)
+	ast, err := ParseString(b.Context(), source)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, ok := ast.GetDefinition("database")
+		_, ok := ast.GetNamespace("database")
 		if !ok {
-			b.Fatal("definition not found")
+			b.Fatal("namespace not found")
 		}
 	}
 }
 
-// BenchmarkAST_GetDefinition measures definition lookup performance.
-func BenchmarkAST_GetDefinition(b *testing.B) {
+// BenchmarkAST_GetNamespace measures namespace lookup performance.
+func BenchmarkAST_GetNamespace(b *testing.B) {
 	source := `
 config : { log_level : "debug", log_format : "json" }
 data : { foo : "bar", baz : 42 }
 other : { x : 1, y : 2, z : 3 }
 `
 
-	ast, err := ParseString(source)
+	ast, err := ParseString(b.Context(), source)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, ok := ast.GetDefinition("data")
+		_, ok := ast.GetNamespace("data")
 		if !ok {
-			b.Fatal("definition not found")
+			b.Fatal("namespace not found")
 		}
 	}
 }
@@ -62,7 +61,7 @@ fourth : { d : 4 }
 fifth : { e : 5 }
 `
 
-	ast, err := ParseString(source)
+	ast, err := ParseString(b.Context(), source)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func BenchmarkParseReader(b *testing.B) {
 		b.Run(size.name, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := ParseReader(strings.NewReader(source))
+				_, err := ParseReader(b.Context(), strings.NewReader(source))
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -118,7 +117,7 @@ cache : { enabled : true, ttl : 3600 }
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ParseString(source)
+		_, err := ParseString(b.Context(), source)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -131,12 +130,12 @@ func BenchmarkAST_Define(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ast := &AST{}
 		for j := 0; j < 100; j++ {
-			ast.Define(
+			ast.DefineNamespace(
 				fmt.Sprintf("def%d", j),
 				nil,
 				NewTuple(
-					NewDefinition("key", nil, NewString("value")),
-					NewDefinition("number", nil, NewNumber("42")),
+					NewNamespace("key", nil, NewString("value")),
+					NewNamespace("number", nil, NewNumber("42")),
 				),
 			)
 		}
@@ -166,14 +165,14 @@ func BenchmarkCompileExprs(b *testing.B) {
 
 		b.Run(size.name, func(b *testing.B) {
 			// Parse without compilation first
-			ast, err := ParseString(source)
+			ast, err := ParseString(b.Context(), source)
 			if err != nil {
 				b.Fatal(err)
 			}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				err := ast.CompileExprs()
+				err := ast.CompileExprs(b.Context())
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -182,18 +181,18 @@ func BenchmarkCompileExprs(b *testing.B) {
 	}
 }
 
-// BenchmarkEvaluateDefinition measures evaluation performance.
-func BenchmarkEvaluateDefinition(b *testing.B) {
+// BenchmarkEvaluateNamespace measures evaluation performance.
+func BenchmarkEvaluateNamespace(b *testing.B) {
 	b.Run("simple_value", func(b *testing.B) {
 		source := `greeting : "Hello, World!"`
-		ast, err := ParseString(source, WithCompileExprs(true))
+		ast, err := ParseString(b.Context(), source, WithCompileExprs(true))
 		if err != nil {
 			b.Fatal(err)
 		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := ast.EvaluateDefinition("greeting", nil)
+			_, err := ast.EvaluateNamespace(b.Context(), "greeting", nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -213,14 +212,14 @@ retries : 3
 }
 }
 `
-		ast, err := ParseString(source, WithCompileExprs(true))
+		ast, err := ParseString(b.Context(), source, WithCompileExprs(true))
 		if err != nil {
 			b.Fatal(err)
 		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := ast.EvaluateDefinition("config", nil)
+			_, err := ast.EvaluateNamespace(b.Context(), "config", nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -237,14 +236,14 @@ product : {{ a * b }},
 complex : {{ (a + b) * 2 }}
 }
 `
-		ast, err := ParseString(source, WithCompileExprs(true))
+		ast, err := ParseString(b.Context(), source, WithCompileExprs(true))
 		if err != nil {
 			b.Fatal(err)
 		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := ast.EvaluateDefinition("math", nil)
+			_, err := ast.EvaluateNamespace(b.Context(), "math", nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -255,14 +254,14 @@ complex : {{ (a + b) * 2 }}
 		// Note: Parameters are typed as any(nil) at compile time, so string
 		// operations on parameters have limitations. Use a simple expression.
 		source := `greet name : {{ name }}`
-		ast, err := ParseString(source, WithCompileExprs(true))
+		ast, err := ParseString(b.Context(), source, WithCompileExprs(true))
 		if err != nil {
 			b.Fatal(err)
 		}
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := ast.EvaluateDefinition("greet", []string{"World"})
+			_, err := ast.EvaluateNamespace(b.Context(), "greet", []string{"World"})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -289,7 +288,7 @@ func BenchmarkFormat(b *testing.B) {
 		source := sb.String()
 
 		b.Run(size.name, func(b *testing.B) {
-			ast, err := ParseString(source)
+			ast, err := ParseString(b.Context(), source)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -298,7 +297,7 @@ func BenchmarkFormat(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				buf.Reset()
-				err := ast.Format(&buf, 2)
+				err := ast.Format(b.Context(), &buf, 2)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -326,7 +325,7 @@ func BenchmarkFormatJSON(b *testing.B) {
 		source := sb.String()
 
 		b.Run(size.name, func(b *testing.B) {
-			ast, err := ParseString(source)
+			ast, err := ParseString(b.Context(), source)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -335,7 +334,7 @@ func BenchmarkFormatJSON(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				buf.Reset()
-				err := ast.FormatJSON(&buf, 2)
+				err := ast.FormatJSON(b.Context(), &buf, 2)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -363,7 +362,7 @@ func BenchmarkFormatYAML(b *testing.B) {
 		source := sb.String()
 
 		b.Run(size.name, func(b *testing.B) {
-			ast, err := ParseString(source)
+			ast, err := ParseString(b.Context(), source)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -372,7 +371,7 @@ func BenchmarkFormatYAML(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				buf.Reset()
-				err := ast.FormatYAML(context.Background(), &buf, 2)
+				err := ast.FormatYAML(b.Context(), &buf, 2)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -400,7 +399,7 @@ func BenchmarkToMap(b *testing.B) {
 		source := sb.String()
 
 		b.Run(size.name, func(b *testing.B) {
-			ast, err := ParseString(source)
+			ast, err := ParseString(b.Context(), source)
 			if err != nil {
 				b.Fatal(err)
 			}

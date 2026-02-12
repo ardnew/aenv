@@ -10,6 +10,9 @@ linters:
     - wrapcheck
     - forbidigo
     - gocritic
+    - gocyclo
+    - cyclop
+    - funlen
     - wsl
   enable:
     - wsl_v5
@@ -39,6 +42,15 @@ linters:
           - mnd
           - gomnd
         source: "^(var|const)?\\s+(([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)|\\w+\\s*=\\s*sync\\.Once)"
+      - linters: # Magic numbers in caller frame skip and file permissions
+          - mnd
+          - gomnd
+        source: "runtime\\.Callers\\(4,"
+      - linters: # Standard file permissions
+          - mnd
+          - gomnd
+        source: "0o644"
+        path: cli/log\.go
       - linters:
           - exhaustruct
           - mnd
@@ -56,7 +68,6 @@ linters:
         source: "_ \"net/http/pprof\""
       # Test files
       - linters:
-          - gocyclo
           - errcheck
           - dupl
           - gosec
@@ -81,24 +92,12 @@ linters:
         path: lang/ast\.go
       # Complex functions that are difficult to simplify
       - linters:
-          - cyclop
-          - gocyclo
           - gocognit
-          - funlen
         path: (lang/marshal|log/pretty|cli/log)\.go
       - linters:
-          - cyclop
-          - gocyclo
           - gocognit
           - nestif
         path: lang/format\.go
-      - linters:
-          - cyclop
-          - funlen
-        path: log/config\.go
-      - linters:
-          - funlen
-        path: cli/cli\.go
       # Inline error handling is idiomatic in certain contexts
       - linters:
           - noinlineerr
@@ -109,9 +108,6 @@ linters:
           - exhaustruct
           - mnd
           - gomnd
-          - funlen
-          - cyclop
-          - gocyclo
           - nestif
           - gocognit
         path: (lang/(eval|cache|marshal|error|value)|cli/cmd/error)\.go
@@ -126,14 +122,24 @@ linters:
       - linters:
           - nilnil
           - ireturn
-          - cyclop
           - nilerr
         path: cli/resolver\.go
       - linters:
           - gochecknoglobals
           - mnd
           - gomnd
-        path: cli/path\.go
+        path: (cli/path\.go|(doc|config)\.go|pkg/pkg\.go)
+      # REPL package is a TUI application with framework-specific patterns
+      - linters:
+          - exhaustive
+          - exhaustruct
+          - gochecknoglobals
+          - ireturn
+          - mnd
+          - gomnd
+          - nestif
+          - noinlineerr
+        path: cli/cmd/repl/
       # Local go.mod replacements needed for development
       - linters:
           - gomoddirectives
@@ -142,6 +148,15 @@ linters:
           - markdownlint
           - no-inline-html
         path: .github/instructions/
+      - linters:
+          - ireturn
+        source: "func\\s+sourceFiles\\w*([^)]*)\\s+.+[(\\w,]*SourceFiles"
+      - linters:
+          - ireturn
+        path: patcher\.go
+      - linters:
+          - contextcheck
+        source: "ctx\\.(eval|build)"
 
 formatters:
   enable:

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 type logConfig struct {
 	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level"                    placeholder:"${enum}"`
 	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format"                   placeholder:"${enum}"`
+	Output     string    `                                          help:"Write log output to file"`
 	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
 	Caller     bool      `default:"false"                           help:"Include caller information"                             negatable:""`
 	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"                       negatable:""`
@@ -64,22 +66,72 @@ func (*logConfig) group() kong.Group {
 	return group
 }
 
-func (f *logConfig) start(ctx context.Context) {
-	log.Config(
+func (f *logConfig) start(ctx context.Context) func() {
+	opts := []log.Option{
 		log.WithLevel(log.ParseLevel(string(f.Level))),
 		log.WithFormat(log.ParseFormat(string(f.Format))),
+		log.WithOutput(os.Stderr),
 		log.WithTimeLayout(f.TimeLayout),
 		log.WithCaller(f.Caller),
 		log.WithPretty(f.Pretty),
-	)
+	}
 
-	log.DebugContext(ctx, "logger initialized",
+	var logFile *os.File
+
+	// Open output file if specified
+	if f.Output != "" {
+		path := f.Output
+		flags := os.O_CREATE | os.O_WRONLY
+
+		// Check for >> prefix to determine append vs truncate mode
+		if len(path) >= 2 && path[:2] == ">>" {
+			// Append mode: strip >> prefix and any leading spaces
+			path = strings.TrimLeft(path[2:], " \t")
+			flags |= os.O_APPEND
+		} else {
+			// Truncate mode: overwrite existing file
+			flags |= os.O_TRUNC
+		}
+
+		file, err := os.OpenFile(
+			path,
+			flags,
+			0o644,
+		)
+		if err != nil {
+			// Exit with error - don't continue with stderr
+			log.ErrorContext(ctx, "failed to open log output file",
+				slog.String("path", path),
+				slog.String("error", err.Error()),
+			)
+			os.Exit(1)
+		}
+
+		logFile = file
+		opts = append(opts, log.WithOutput(file))
+	}
+
+	log.Config(opts...)
+
+	logAttrs := []slog.Attr{
 		slog.String("level", string(f.Level)),
 		slog.String("format", string(f.Format)),
 		slog.String("time", f.TimeLayout),
 		slog.Bool("caller", f.Caller),
 		slog.Bool("pretty", f.Pretty),
-	)
+	}
+	if f.Output != "" {
+		logAttrs = append(logAttrs, slog.String("output", f.Output))
+	}
+
+	log.DebugContext(ctx, "logger initialized", logAttrs...)
+
+	// Return cleanup function that closes the log file
+	return func() {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+	}
 }
 
 // scan performs an early pass over command-line arguments to extract and
@@ -142,6 +194,16 @@ func (f *logConfig) scan(args []string) {
 
 		// Apply configuration
 		switch name {
+		case "--log-output":
+			// Non-boolean flag: consume next arg as value if not assigned
+			if !assigned && i+1 < len(args) && len(args[i+1]) > 0 &&
+				args[i+1][0] != '-' {
+				value = args[i+1]
+				i++
+			}
+
+			f.Output = value
+
 		case "--log-level":
 			// Non-boolean flag: consume next arg as value if not assigned
 			if !assigned && i+1 < len(args) && len(args[i+1]) > 0 &&

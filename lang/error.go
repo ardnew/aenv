@@ -12,18 +12,19 @@ import (
 
 // Predefined errors (sentinel values).
 var (
-	ErrNoParseTree        = NewError("no parse tree generated")
-	ErrInvalidToken       = NewError("invalid token")
-	ErrAmbiguousParse     = NewError("ambiguous parse")
-	ErrMaxDepthExceeded   = NewError("maximum definition depth exceeded")
-	ErrDefinitionNotFound = NewError("definition not found")
-	ErrReadInput          = NewError("failed to read input")
-	ErrExprCompile        = NewError("expression compilation failed")
-	ErrExprEvaluate       = NewError("expression evaluation failed")
-	ErrParamCountMismatch = NewError("parameter count mismatch")
-	ErrInvalidValueType   = NewError("invalid value type")
-	ErrInvalidBoolean     = NewError("invalid boolean value")
-	ErrInvalidNumber      = NewError("invalid number value")
+	ErrNoParseTree      = NewError("no parse tree generated")
+	ErrInvalidToken     = NewError("invalid token")
+	ErrAmbiguousParse   = NewError("ambiguous parse")
+	ErrMaxDepthExceeded = NewError("maximum namespace depth exceeded")
+	ErrNotDefined       = NewError("namespace not found")
+	ErrReadInput        = NewError("failed to read input")
+	ErrExprCompile      = NewError("expression compilation failed")
+	ErrExprEvaluate     = NewError("expression evaluation failed")
+	ErrParameterCount   = NewError("invalid parameter count")
+	ErrArgumentCount    = NewError("invalid argument count")
+	ErrInvalidValueType = NewError("invalid value type")
+	ErrInvalidBoolean   = NewError("invalid boolean value")
+	ErrInvalidNumber    = NewError("invalid number value")
 )
 
 // Error represents an error with optional structured logging attributes.

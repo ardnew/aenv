@@ -1,6 +1,7 @@
 package lang
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,57 +16,59 @@ import (
 	"github.com/ardnew/aenv/lang/parser"
 	"github.com/ardnew/aenv/lang/parser/bsr"
 	"github.com/ardnew/aenv/lang/token"
+	"github.com/ardnew/aenv/log"
 )
 
 // AST represents the abstract syntax tree for the aenv language.
 type AST struct {
-	Definitions []*Definition
-	opts        optionsKey   // configuration options
-	build       buildContext // build state (used during parsing)
+	Namespaces []*Namespace
+	opts       optionsKey   // configuration options
+	build      buildContext // build state (used during parsing)
+	logger     log.Logger   // structured logger (outside optionsKey, doesn't affect cache)
 }
 
-// Define adds a new definition to the AST and returns it.
-func (ast *AST) Define(
+// DefineNamespace adds a new namespace to the AST and returns it.
+func (ast *AST) DefineNamespace(
 	identifier string,
 	params []*Value,
 	value *Value,
-) *Definition {
-	def := &Definition{
+) *Namespace {
+	ns := &Namespace{
 		Identifier: newToken("identifier", identifier),
 		Parameters: params,
 		Value:      value,
 	}
-	ast.Definitions = append(ast.Definitions, def)
+	ast.Namespaces = append(ast.Namespaces, ns)
 
-	return def
+	return ns
 }
 
-// GetDefinition retrieves a definition by its identifier.
-// Returns (nil, false) if the definition is not found.
-func (ast *AST) GetDefinition(name string) (*Definition, bool) {
-	for _, def := range ast.Definitions {
-		if def.Identifier.LiteralString() == name {
-			return def, true
+// GetNamespace retrieves a namespace by its identifier.
+// Returns (nil, false) if the namespace is not found.
+func (ast *AST) GetNamespace(name string) (*Namespace, bool) {
+	for _, ns := range ast.Namespaces {
+		if ns.Identifier.LiteralString() == name {
+			return ns, true
 		}
 	}
 
 	return nil, false
 }
 
-// All returns an iterator over all definitions in the AST.
-func (ast *AST) All() iter.Seq[*Definition] {
-	return func(yield func(*Definition) bool) {
-		for _, def := range ast.Definitions {
-			if !yield(def) {
+// All returns an iterator over all namespaces in the AST.
+func (ast *AST) All() iter.Seq[*Namespace] {
+	return func(yield func(*Namespace) bool) {
+		for _, ns := range ast.Namespaces {
+			if !yield(ns) {
 				return
 			}
 		}
 	}
 }
 
-// Definition represents a definition declaration: identity [Parameters] :
+// Namespace represents a namespace declaration: identifier [Parameters] :
 // Value.
-type Definition struct {
+type Namespace struct {
 	Identifier *token.Token
 	Parameters []*Value
 	Value      *Value
@@ -80,10 +83,10 @@ type Tuple struct {
 type Value struct {
 	Type Type
 	// Exactly one of these will be set based on Type
-	Token      *token.Token // For identifiers, literals, keywords
-	Tuple      *Tuple       // For tuples/values
-	Definition *Definition  // For recursive definitions
-	Program    *vm.Program  // Compiled expr program (TypeExpr only)
+	Token     *token.Token // For identifiers, literals, keywords
+	Tuple     *Tuple       // For tuples/values
+	Namespace *Namespace   // For recursive namespaces
+	Program   *vm.Program  // Compiled expr program (TypeExpr only)
 }
 
 // ExprSource returns the raw expression source for TypeExpr values.
@@ -104,7 +107,7 @@ func (v *Value) ExprSource() string {
 type Type int
 
 const (
-	// TypeIdentifier represents an identifier reference to another definition.
+	// TypeIdentifier represents an identifier reference to another namespace.
 	TypeIdentifier Type = iota
 
 	// TypeBoolean represents a boolean literal value.
@@ -122,8 +125,8 @@ const (
 	// TypeTuple represents a tuple of key-value pairs.
 	TypeTuple
 
-	// TypeDefinition represents a nested definition.
-	TypeDefinition
+	// TypeNamespace represents a nested namespace.
+	TypeNamespace
 )
 
 // String returns a string representation of the value type.
@@ -131,24 +134,31 @@ func (vt Type) String() string {
 	switch vt {
 	case TypeIdentifier:
 		return "Identifier"
+
 	case TypeBoolean:
 		return "Boolean"
+
 	case TypeNumber:
 		return "Number"
+
 	case TypeString:
 		return "String"
+
 	case TypeExpr:
 		return "Expr"
+
 	case TypeTuple:
 		return "Tuple"
-	case TypeDefinition:
-		return "Definition"
+
+	case TypeNamespace:
+		return "Namespace"
+
 	default:
 		return "Unknown"
 	}
 }
 
-// DefaultMaxDepth is the default maximum depth for recursive definitions.
+// DefaultMaxDepth is the default maximum depth for recursive namespaces.
 // Users may modify this before parsing to change the default.
 var DefaultMaxDepth = 100
 
@@ -169,7 +179,7 @@ type buildContext struct {
 // Option configures AST parsing or evaluation behavior.
 type Option func(*AST)
 
-// WithMaxDepth sets the maximum recursion depth for nested definitions.
+// WithMaxDepth sets the maximum recursion depth for nested namespaces.
 func WithMaxDepth(depth int) Option {
 	return func(ast *AST) {
 		ast.opts.maxDepth = depth
@@ -191,6 +201,14 @@ func WithProcessEnv(env []string) Option {
 	}
 }
 
+// WithLogger sets the structured logger for trace-level debugging.
+// If not provided, the logger is zero-valued and all logging is a no-op.
+func WithLogger(logger log.Logger) Option {
+	return func(ast *AST) {
+		ast.logger = logger
+	}
+}
+
 // applyDefaults sets default option values on an AST.
 func applyDefaults(ast *AST) {
 	ast.opts.maxDepth = DefaultMaxDepth
@@ -207,12 +225,27 @@ func applyOptions(ast *AST, opts ...Option) {
 // Options can be provided to customize parsing behavior.
 // The result is cached for efficient repeated parsing of the same content
 // when no options or default options are used.
-func ParseString(input string, opts ...Option) (*AST, error) {
+func ParseString(
+	ctx context.Context,
+	input string,
+	opts ...Option,
+) (*AST, error) {
+	var tempAST AST
+
+	applyDefaults(&tempAST)
+	applyOptions(&tempAST, opts...)
+
+	tempAST.logger.TraceContext(
+		ctx,
+		"parse start",
+		slog.Int("source_length", len(input)),
+	)
+
 	if len(opts) == 0 {
-		return parseStringCached(input)
+		return parseStringCached(ctx, input)
 	}
 
-	ast, err := parse(lexer.New([]rune(input)), input, opts...)
+	ast, err := parse(ctx, lexer.New([]rune(input)), input, opts...)
 
 	// If it's a ParseError, attach the source input for better error messages
 	pe := &ParseError{}
@@ -225,27 +258,76 @@ func ParseString(input string, opts ...Option) (*AST, error) {
 
 // Parse parses the lexer output and returns the AST.
 // Options can be provided to customize parsing behavior.
-func Parse(l *lexer.Lexer, opts ...Option) (*AST, error) {
-	return parse(l, "", opts...)
+func Parse(ctx context.Context, l *lexer.Lexer, opts ...Option) (*AST, error) {
+	return parse(ctx, l, "", opts...)
+}
+
+// ParseValue parses a single value expression from a string.
+// The input can be any valid aenv value: literal, tuple, identifier, or
+// definition. For expressions ({{ ... }}), they are parsed but not compiled.
+func ParseValue(
+	ctx context.Context,
+	input string,
+	opts ...Option,
+) (*Value, error) {
+	// Wrap in a dummy definition to reuse the full parser
+	wrapped := "_: " + input
+
+	ast, err := ParseString(ctx, wrapped, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ast.Namespaces) == 0 {
+		return nil, ErrInvalidToken.With(slog.String("input", input))
+	}
+
+	return ast.Namespaces[0].Value, nil
 }
 
 // parse is the internal parsing implementation.
-func parse(l *lexer.Lexer, source string, opts ...Option) (*AST, error) {
+func parse(
+	ctx context.Context,
+	l *lexer.Lexer,
+	source string,
+	opts ...Option,
+) (*AST, error) {
+	var tempAST AST
+
+	applyDefaults(&tempAST)
+	applyOptions(&tempAST, opts...)
+
+	tempAST.logger.TraceContext(ctx, "lexer created")
+
 	bsrSet, errs := parser.Parse(l)
+
+	tempAST.logger.TraceContext(
+		ctx,
+		"parser complete",
+		slog.Int("error_count", len(errs)),
+	)
 
 	if len(errs) > 0 {
 		return nil, NewParseError(errs, source)
 	}
 
-	ast, err := buildAST(bsrSet, source, opts...)
+	ast, err := buildAST(ctx, bsrSet, source, opts...)
 	if err != nil {
 		return ast, err
 	}
 
-	err = ast.CompileExprs()
+	ast.logger.TraceContext(
+		ctx,
+		"ast built",
+		slog.Int("namespace_count", len(ast.Namespaces)),
+	)
+
+	err = ast.CompileExprs(ctx)
 	if err != nil {
 		return ast, err
 	}
+
+	ast.logger.TraceContext(ctx, "expressions compiled")
 
 	return ast, nil
 }
@@ -287,6 +369,7 @@ func formatAmbiguityError(source string, line, col int) error {
 
 // buildAST constructs the AST from the BSR parse forest.
 func buildAST(
+	ctx context.Context,
 	bsrSet *bsr.Set,
 	source string,
 	opts ...Option,
@@ -330,31 +413,34 @@ func buildAST(
 		}
 	}()
 
-	// The root is Manifest : Definitions
+	// The root is Manifest : Namespaces
 	root := bsrSet.GetRoot()
-	definitionsNode := root.GetNTChildI(0) // Get the Definitions NT at position 0
 
-	definitions, err := ast.buildDefinitions(definitionsNode)
+	ast.logger.TraceContext(ctx, "bsr root obtained")
+
+	namespacesNode := root.GetNTChildI(0) // Get the Namespaces NT at position 0
+
+	ns, err := ast.buildNamespaces(ctx, namespacesNode)
 	if err != nil {
 		return nil, err
 	}
 
-	ast.Definitions = definitions
+	ast.Namespaces = ns
 	ast.resetBuildState()
 
 	return ast, nil
 }
 
 // Print writes a formatted representation of the AST to the writer.
-func (ast *AST) Print(w io.Writer) {
-	ast.PrintIndent(w, 0)
+func (ast *AST) Print(ctx context.Context, w io.Writer) {
+	ast.PrintIndent(ctx, w, 0)
 }
 
 // PrintIndent writes a formatted representation of the AST to the writer
 // with the specified indentation.
-func (ast *AST) PrintIndent(w io.Writer, indent int) {
-	for _, def := range ast.Definitions {
-		def.Print(w, indent)
+func (ast *AST) PrintIndent(ctx context.Context, w io.Writer, indent int) {
+	for _, ns := range ast.Namespaces {
+		ns.Print(ctx, w, indent)
 	}
 }
 
@@ -364,9 +450,12 @@ func (ast *AST) resetBuildState() {
 	ast.build.chain = nil
 }
 
-// Definitions : Definition Definitions | Definition separator Definitions |
+// Namespaces : Namespace Namespaces | Namespace separator Namespaces |
 // empty.
-func (ast *AST) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
+func (ast *AST) buildNamespaces(
+	ctx context.Context,
+	b bsr.BSR,
+) ([]*Namespace, error) {
 	alt := b.Alternate()
 
 	if alt == 2 {
@@ -374,35 +463,38 @@ func (ast *AST) buildDefinitions(b bsr.BSR) ([]*Definition, error) {
 		return nil, nil
 	}
 
-	// Get the first definition (always at index 0)
-	def, err := ast.buildDefinition(b.GetNTChildI(0))
+	// Get the first namespace (always at index 0)
+	ns, err := ast.buildNamespace(ctx, b.GetNTChildI(0))
 	if err != nil {
 		return nil, err
 	}
 
 	if alt == 0 {
-		// Definition Definitions (no separator)
-		// 0=Definition 1=Definitions
-		rest, err := ast.buildDefinitions(b.GetNTChildI(1))
+		// Namespace Namespaces (no separator)
+		// 0=Namespace 1=Namespaces
+		rest, err := ast.buildNamespaces(ctx, b.GetNTChildI(1))
 		if err != nil {
 			return nil, err
 		}
 
-		return append([]*Definition{def}, rest...), nil
+		return append([]*Namespace{ns}, rest...), nil
 	}
 
-	// alt == 1: Definition separator Definitions
-	// 0=Definition 1=separator 2=Definitions
-	rest, err := ast.buildDefinitions(b.GetNTChildI(2))
+	// alt == 1: Namespace separator Namespaces
+	// 0=Namespace 1=separator 2=Namespaces
+	rest, err := ast.buildNamespaces(ctx, b.GetNTChildI(2))
 	if err != nil {
 		return nil, err
 	}
 
-	return append([]*Definition{def}, rest...), nil
+	return append([]*Namespace{ns}, rest...), nil
 }
 
-// Definition : identifier Parameters op_define Value.
-func (ast *AST) buildDefinition(b bsr.BSR) (*Definition, error) {
+// Namespace : identifier Parameters op_define Value.
+func (ast *AST) buildNamespace(
+	ctx context.Context,
+	b bsr.BSR,
+) (*Namespace, error) {
 	// Check recursion depth
 	if ast.build.depth >= ast.opts.maxDepth {
 		return nil, ErrMaxDepthExceeded.
@@ -414,7 +506,7 @@ func (ast *AST) buildDefinition(b bsr.BSR) (*Definition, error) {
 	identToken := b.GetTChildI(0)
 	identName := identToken.LiteralString()
 
-	// Track this definition in the chain
+	// Track this namespace in the chain
 	ast.build.chain = append(ast.build.chain, identName)
 	ast.build.depth++
 
@@ -424,17 +516,25 @@ func (ast *AST) buildDefinition(b bsr.BSR) (*Definition, error) {
 	}()
 
 	// 0=identifier 1=Parameters 2=op_define 3=Value
-	params, err := ast.buildParameters(b.GetNTChildI(1))
+	params, err := ast.buildParameters(ctx, b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
 
-	val, err := ast.buildValue(b.GetNTChildI(3))
+	ast.logger.TraceContext(
+		ctx,
+		"build namespace",
+		slog.String("identifier", identName),
+		slog.Int("depth", ast.build.depth),
+		slog.Int("param_count", len(params)),
+	)
+
+	val, err := ast.buildValue(ctx, b.GetNTChildI(3))
 	if err != nil {
 		return nil, err
 	}
 
-	return &Definition{
+	return &Namespace{
 		Identifier: identToken,
 		Parameters: params,
 		Value:      val,
@@ -442,7 +542,10 @@ func (ast *AST) buildDefinition(b bsr.BSR) (*Definition, error) {
 }
 
 // Parameters : identifier Parameters | empty.
-func (ast *AST) buildParameters(b bsr.BSR) ([]*Value, error) {
+func (ast *AST) buildParameters(
+	ctx context.Context,
+	b bsr.BSR,
+) ([]*Value, error) {
 	if b.Alternate() == 1 {
 		// empty alternate
 		return nil, nil
@@ -452,7 +555,7 @@ func (ast *AST) buildParameters(b bsr.BSR) ([]*Value, error) {
 	tok := b.GetTChildI(0)
 	val := &Value{Type: TypeIdentifier, Token: tok}
 
-	rest, err := ast.buildParameters(b.GetNTChildI(1))
+	rest, err := ast.buildParameters(ctx, b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
@@ -461,9 +564,9 @@ func (ast *AST) buildParameters(b bsr.BSR) ([]*Value, error) {
 }
 
 // Tuple : "{" Values "}".
-func (ast *AST) buildTuple(b bsr.BSR) (*Tuple, error) {
+func (ast *AST) buildTuple(ctx context.Context, b bsr.BSR) (*Tuple, error) {
 	// 0="{" 1=Values 2="}"
-	values, err := ast.buildValues(b.GetNTChildI(1))
+	values, err := ast.buildValues(ctx, b.GetNTChildI(1))
 	if err != nil {
 		return nil, err
 	}
@@ -472,10 +575,10 @@ func (ast *AST) buildTuple(b bsr.BSR) (*Tuple, error) {
 }
 
 // Values : Value | Value delimiter Values | empty.
-func (ast *AST) buildValues(b bsr.BSR) ([]*Value, error) {
+func (ast *AST) buildValues(ctx context.Context, b bsr.BSR) ([]*Value, error) {
 	switch b.Alternate() {
 	case 0: // Value
-		val, err := ast.buildValue(b.GetNTChildI(0))
+		val, err := ast.buildValue(ctx, b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
@@ -483,17 +586,18 @@ func (ast *AST) buildValues(b bsr.BSR) ([]*Value, error) {
 		return []*Value{val}, nil
 
 	case 1: // 0=Value 1=delimiter 2=Values
-		val, err := ast.buildValue(b.GetNTChildI(0))
+		val, err := ast.buildValue(ctx, b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
 
-		rest, err := ast.buildValues(b.GetNTChildI(2))
+		rest, err := ast.buildValues(ctx, b.GetNTChildI(2))
 		if err != nil {
 			return nil, err
 		}
 
 		return append([]*Value{val}, rest...), nil
+
 	case 2: // empty
 		return nil, nil
 
@@ -503,26 +607,46 @@ func (ast *AST) buildValues(b bsr.BSR) ([]*Value, error) {
 }
 
 // Value : Literal | Tuple | Definition | identifier.
-func (ast *AST) buildValue(b bsr.BSR) (*Value, error) {
-	switch b.Alternate() {
+func (ast *AST) buildValue(ctx context.Context, b bsr.BSR) (*Value, error) {
+	alt := b.Alternate()
+	alternate := "Unknown"
+
+	switch alt {
+	case 0:
+		alternate = "Literal"
+	case 1:
+		alternate = "Tuple"
+	case 2:
+		alternate = "Namespace"
+	case 3:
+		alternate = "Identifier"
+	}
+
+	ast.logger.TraceContext(
+		ctx,
+		"build value",
+		slog.String("alternate", alternate),
+	)
+
+	switch alt {
 	case 0: // Literal
-		return ast.buildLiteral(b.GetNTChildI(0))
+		return ast.buildLiteral(ctx, b.GetNTChildI(0))
 
 	case 1: // Tuple
-		tuple, err := ast.buildTuple(b.GetNTChildI(0))
+		tuple, err := ast.buildTuple(ctx, b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
 
 		return &Value{Type: TypeTuple, Tuple: tuple}, nil
 
-	case 2: // Definition (recursive!)
-		def, err := ast.buildDefinition(b.GetNTChildI(0))
+	case 2: // Namespace (recursive!)
+		ns, err := ast.buildNamespace(ctx, b.GetNTChildI(0))
 		if err != nil {
 			return nil, err
 		}
 
-		return &Value{Type: TypeDefinition, Definition: def}, nil
+		return &Value{Type: TypeNamespace, Namespace: ns}, nil
 
 	case 3: // identifier
 		return &Value{Type: TypeIdentifier, Token: b.GetTChildI(0)}, nil
@@ -535,19 +659,51 @@ func (ast *AST) buildValue(b bsr.BSR) (*Value, error) {
 }
 
 // Literal : boolean_literal | number_literal | string_literal | expr_literal.
-func (ast *AST) buildLiteral(b bsr.BSR) (*Value, error) {
+func (ast *AST) buildLiteral(ctx context.Context, b bsr.BSR) (*Value, error) {
 	switch b.Alternate() {
 	case 0: // boolean_literal
-		return &Value{Type: TypeBoolean, Token: b.GetTChildI(0)}, nil
+		tok := b.GetTChildI(0)
+		ast.logger.TraceContext(
+			ctx,
+			"build literal",
+			slog.String("type", "Boolean"),
+			slog.String("value", tok.LiteralString()),
+		)
+
+		return &Value{Type: TypeBoolean, Token: tok}, nil
 
 	case 1: // number_literal
-		return &Value{Type: TypeNumber, Token: b.GetTChildI(0)}, nil
+		tok := b.GetTChildI(0)
+		ast.logger.TraceContext(
+			ctx,
+			"build literal",
+			slog.String("type", "Number"),
+			slog.String("value", tok.LiteralString()),
+		)
+
+		return &Value{Type: TypeNumber, Token: tok}, nil
 
 	case 2: // string_literal
-		return &Value{Type: TypeString, Token: b.GetTChildI(0)}, nil
+		tok := b.GetTChildI(0)
+		ast.logger.TraceContext(
+			ctx,
+			"build literal",
+			slog.String("type", "String"),
+			slog.String("value", tok.LiteralString()),
+		)
+
+		return &Value{Type: TypeString, Token: tok}, nil
 
 	case 3: // expr_literal
-		return &Value{Type: TypeExpr, Token: b.GetTChildI(0)}, nil
+		tok := b.GetTChildI(0)
+		ast.logger.TraceContext(
+			ctx,
+			"build literal",
+			slog.String("type", "Expr"),
+			slog.String("value", tok.LiteralString()),
+		)
+
+		return &Value{Type: TypeExpr, Token: tok}, nil
 
 	default:
 		return nil, ErrInvalidToken.With(slog.String("token", "Literal"))
@@ -563,26 +719,26 @@ func writer(w io.Writer) func(eol string, item ...string) {
 	}
 }
 
-// Print writes a formatted representation of the definition.
-func (def *Definition) Print(w io.Writer, indent int) {
+// Print writes a formatted representation of the namespace.
+func (ns *Namespace) Print(ctx context.Context, w io.Writer, indent int) {
 	prefix := strings.Repeat("  ", indent)
 	put := writer(w)
-	put("\n", prefix+"Definition", def.Identifier.LiteralString())
+	put("\n", prefix+"Namespace", ns.Identifier.LiteralString())
 
-	if len(def.Parameters) > 0 {
+	if len(ns.Parameters) > 0 {
 		put(":\n", prefix+"  Parameters")
 
-		for _, param := range def.Parameters {
-			param.Print(w, indent+2)
+		for _, param := range ns.Parameters {
+			param.Print(ctx, w, indent+2)
 		}
 	}
 
 	put(":\n", prefix+"  Value")
-	def.Value.Print(w, indent+2)
+	ns.Value.Print(ctx, w, indent+2)
 }
 
 // Print writes a formatted representation of the tuple.
-func (t *Tuple) Print(w io.Writer, indent int) {
+func (t *Tuple) Print(ctx context.Context, w io.Writer, indent int) {
 	prefix := strings.Repeat("  ", indent)
 
 	if len(t.Values) == 0 {
@@ -592,12 +748,12 @@ func (t *Tuple) Print(w io.Writer, indent int) {
 	}
 
 	for _, val := range t.Values {
-		val.Print(w, indent)
+		val.Print(ctx, w, indent)
 	}
 }
 
 // Print writes a formatted representation of the value.
-func (v *Value) Print(w io.Writer, indent int) {
+func (v *Value) Print(ctx context.Context, w io.Writer, indent int) {
 	prefix := strings.Repeat("  ", indent)
 	put := writer(w)
 
@@ -605,13 +761,13 @@ func (v *Value) Print(w io.Writer, indent int) {
 	case TypeTuple:
 		put("", prefix+"Tuple", "")
 		put("\n")
-		v.Tuple.Print(w, indent+1)
+		v.Tuple.Print(ctx, w, indent+1)
 
-	case TypeDefinition:
-		// For nested definitions, print them directly without the "Definition:"
+	case TypeNamespace:
+		// For nested namespaces, print them directly without the "Namespace:"
 		// prefix
-		// since Definition.Print already adds that
-		v.Definition.Print(w, indent)
+		// since Namespace.Print already adds that
+		v.Namespace.Print(ctx, w, indent)
 
 	default:
 		put("", prefix+v.Type.String(), "")

@@ -4,7 +4,5 @@
     "davidanson.vscode-markdownlint",
     "golang.go",
 		"dunstontc.vscode-go-syntax",
-    "formulahendry.code-runner",
-    "github.copilot",
   ]
 }

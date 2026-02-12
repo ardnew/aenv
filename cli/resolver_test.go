@@ -28,7 +28,7 @@ func TestGetOrParseConfig_ParsesOnce(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			r := strings.NewReader(config)
-			ast, err := lang.ParseReader(r)
+			ast, err := lang.ParseReader(t.Context(), r)
 			results[idx] = ast
 			errors[idx] = err
 		}(i)
@@ -47,37 +47,37 @@ func TestGetOrParseConfig_ParsesOnce(t *testing.T) {
 	// But the underlying definitions should be the same. Verify via definition retrieval.
 	first := results[0]
 	for i := 1; i < len(results); i++ {
-		if len(results[i].Definitions) != len(first.Definitions) {
+		if len(results[i].Namespaces) != len(first.Namespaces) {
 			t.Errorf("result %d has different definition count", i)
 		}
 	}
 
 	// Verify definition caching by checking same source produces same definition instances
-	ast1, err := lang.ParseString(config)
+	ast1, err := lang.ParseString(t.Context(), config)
 	if err != nil {
 		t.Fatalf("first ParseString failed: %v", err)
 	}
-	ast2, err := lang.ParseString(config)
+	ast2, err := lang.ParseString(t.Context(), config)
 	if err != nil {
 		t.Fatalf("second ParseString failed: %v", err)
 	}
-	def1, ok1 := ast1.GetDefinition("test")
-	def2, ok2 := ast2.GetDefinition("test")
+	ns1, ok1 := ast1.GetNamespace("test")
+	ns2, ok2 := ast2.GetNamespace("test")
 	if !ok1 || !ok2 {
-		t.Fatal("expected definition to be found")
+		t.Fatal("expected namespace to be found")
 	}
-	if def1 != def2 {
-		t.Error("expected same definition instance from cache")
+	if ns1 != ns2 {
+		t.Error("expected same namespace instance from cache")
 	}
 
 	// Verify cache has entries for this source
-	// With definition-level caching, we don't check total cache size
+	// With namespace-level caching, we don't check total cache size
 	// Just verify the definition can be retrieved
-	ast, err := lang.ParseString(config)
+	ast, err := lang.ParseString(t.Context(), config)
 	if err != nil {
 		t.Fatalf("ParseString failed: %v", err)
 	}
-	_, ok := ast.GetDefinition("test")
+	_, ok := ast.GetNamespace("test")
 	if !ok {
 		t.Error("failed to retrieve cached definition")
 	}
@@ -91,12 +91,12 @@ func TestGetOrParseConfig_DifferentContent(t *testing.T) {
 	config2 := `other : { baz : 42 }`
 
 	// Parse two different configs
-	ast1, err1 := lang.ParseReader(strings.NewReader(config1))
+	ast1, err1 := lang.ParseReader(t.Context(), strings.NewReader(config1))
 	if err1 != nil {
 		t.Fatalf("parse config1 failed: %v", err1)
 	}
 
-	ast2, err2 := lang.ParseReader(strings.NewReader(config2))
+	ast2, err2 := lang.ParseReader(t.Context(), strings.NewReader(config2))
 	if err2 != nil {
 		t.Fatalf("parse config2 failed: %v", err2)
 	}
@@ -107,21 +107,21 @@ func TestGetOrParseConfig_DifferentContent(t *testing.T) {
 	}
 
 	// Verify both definitions are accessible
-	// With definition-level caching, verify retrieval works
-	ast1Reparse, err := lang.ParseString(config1)
+	// With namespace-level caching, verify retrieval works
+	ast1Reparse, err := lang.ParseString(t.Context(), config1)
 	if err != nil {
 		t.Fatalf("reparse config1 failed: %v", err)
 	}
-	if _, ok := ast1Reparse.GetDefinition("test"); !ok {
-		t.Error("failed to retrieve test definition")
+	if _, ok := ast1Reparse.GetNamespace("test"); !ok {
+		t.Error("failed to retrieve test namespace")
 	}
 
-	ast2Reparse, err := lang.ParseString(config2)
+	ast2Reparse, err := lang.ParseString(t.Context(), config2)
 	if err != nil {
 		t.Fatalf("reparse config2 failed: %v", err)
 	}
-	if _, ok := ast2Reparse.GetDefinition("other"); !ok {
-		t.Error("failed to retrieve other definition")
+	if _, ok := ast2Reparse.GetNamespace("other"); !ok {
+		t.Error("failed to retrieve other namespace")
 	}
 }
 
@@ -132,13 +132,13 @@ func TestGetOrParseConfig_ErrorHandling(t *testing.T) {
 	invalidConfig := `invalid syntax { { {`
 
 	// Parse invalid config
-	_, err := lang.ParseReader(strings.NewReader(invalidConfig))
+	_, err := lang.ParseReader(t.Context(), strings.NewReader(invalidConfig))
 	if err == nil {
 		t.Error("expected parse error for invalid config")
 	}
 
 	// Parse again - should return same error from cache
-	_, err2 := lang.ParseReader(strings.NewReader(invalidConfig))
+	_, err2 := lang.ParseReader(t.Context(), strings.NewReader(invalidConfig))
 	if err2 == nil {
 		t.Error("expected cached parse error")
 	}
@@ -181,7 +181,7 @@ other : {
 }`
 
 	// Load config namespace
-	loader := resolve("config")
+	loader := resolve(t.Context(), "config")
 	resolver, err := loader(strings.NewReader(config))
 	if err != nil {
 		t.Fatalf("loadNamespace failed: %v", err)
@@ -224,7 +224,7 @@ func TestLoadNamespace_MissingNamespace(t *testing.T) {
 	config := `existing : { foo : "bar" }`
 
 	// Load non-existent namespace
-	loader := resolve("missing")
+	loader := resolve(t.Context(), "missing")
 	resolver, err := loader(strings.NewReader(config))
 	if err != nil {
 		t.Fatalf("loadNamespace failed: %v", err)
@@ -247,7 +247,7 @@ func TestLoadNamespace_UnderscoreHyphenMapping(t *testing.T) {
 
 	config := `config : { log_level : "debug" }`
 
-	loader := resolve("config")
+	loader := resolve(t.Context(), "config")
 	resolver, err := loader(strings.NewReader(config))
 	if err != nil {
 		t.Fatalf("loadNamespace failed: %v", err)
@@ -280,11 +280,11 @@ func BenchmarkGetOrParseConfig_Cached(b *testing.B) {
 	lang.ClearCache()
 
 	config := `test : { foo : "bar", baz : 42, nested : { a : 1, b : 2 } }`
-	_, _ = lang.ParseString(config)
+	_, _ = lang.ParseString(b.Context(), config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := lang.ParseString(config)
+		_, err := lang.ParseString(b.Context(), config)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -301,7 +301,7 @@ func BenchmarkGetOrParseConfig_Uncached(b *testing.B) {
 		lang.ClearCache()
 		b.StartTimer()
 
-		_, err := lang.ParseString(config)
+		_, err := lang.ParseString(b.Context(), config)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -314,7 +314,7 @@ func TestGetOrParseConfig_ReadError(t *testing.T) {
 	errReader := &errorReader{err: bytes.ErrTooLarge}
 
 	// ParseReader should return the error
-	_, err := lang.ParseReader(errReader)
+	_, err := lang.ParseReader(t.Context(), errReader)
 	if err == nil {
 		t.Error("expected read error")
 	}

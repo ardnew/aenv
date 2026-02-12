@@ -14,7 +14,10 @@ import (
 // Level represents the severity of a log message.
 type Level slog.Level
 
+const levelTraceMask = -8
+
 const (
+	LevelTrace Level = Level(levelTraceMask)  // trace
 	LevelDebug Level = Level(slog.LevelDebug) // debug
 	LevelInfo  Level = Level(slog.LevelInfo)  // info
 	LevelWarn  Level = Level(slog.LevelWarn)  // warn
@@ -28,6 +31,7 @@ const DefaultLevel = LevelInfo
 func Levels() iter.Seq[string] {
 	return func(yield func(string) bool) {
 		for _, level := range []Level{
+			LevelTrace,
 			LevelDebug,
 			LevelInfo,
 			LevelWarn,
@@ -41,10 +45,16 @@ func Levels() iter.Seq[string] {
 }
 
 // ParseLevel parses a string representation of a log level.
-// Valid level strings are "DEBUG", "INFO", "WARN", and "ERROR",
+// Valid level strings are "TRACE", "DEBUG", "INFO", "WARN", and "ERROR",
 // optionally followed by a "+" or "-" and an integer offset.
 // See [slog.Level.UnmarshalText] for details.
 func ParseLevel(s string) Level {
+	// Check for "trace" explicitly since slog.Level.UnmarshalText doesn't
+	// recognize it
+	if strings.EqualFold(s, "trace") {
+		return LevelTrace
+	}
+
 	l := new(slog.Level)
 
 	err := l.UnmarshalText([]byte(s))
@@ -152,6 +162,15 @@ func (c config) handler(opts ...Option) slog.Handler {
 						}
 
 						a.Value = slog.StringValue(formatted)
+					}
+				}
+
+				// Replace level with custom string representation to show
+				// "TRACE" instead of "DEBUG-4". Use uppercase to match slog's
+				// default level formatting.
+				if a.Key == slog.LevelKey {
+					if level, ok := a.Value.Any().(slog.Level); ok {
+						a.Value = slog.StringValue(strings.ToUpper(Level(level).String()))
 					}
 				}
 
@@ -340,8 +359,6 @@ func WithPretty(enable bool) Option {
 }
 
 // timeLayout maps named layouts to their corresponding time.Time constants.
-//
-//nolint:gochecknoglobals // lookup table
 var timeLayout = map[string]string{
 	"rfc3339":     time.RFC3339,
 	"rfc3339nano": time.RFC3339Nano,

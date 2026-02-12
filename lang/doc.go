@@ -5,5 +5,3 @@
 // individual [Definition]s without loading entire ASTs into memory.
 // [Definition]s are cached automatically for improved performance.
 package lang
-
-//go:generate go tool gogll "README.md"

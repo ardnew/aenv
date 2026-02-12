@@ -1,65 +1,70 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
 
-	"github.com/ardnew/aenv/lang"
+	"github.com/ardnew/aenv/cli/cmd/repl"
+	"github.com/ardnew/aenv/log"
 )
 
-// Eval evaluates a definition from a source file with the given arguments.
+// Eval evaluates a namespace from a source file with the given arguments.
 type Eval struct {
-	Name   string   `arg:"" help:"Definition identifier to evaluate"          name:"name"`
-	Args   []string `arg:"" help:"Arguments to bind to definition parameters" name:"args" optional:""`
-	Source string   `       help:"Source input file or '-' for stdin"                                 default:"-" short:"f"`
+	Name string   `arg:"" help:"Namespace identifier to evaluate"          name:"name" optional:""`
+	Args []string `arg:"" help:"Arguments to bind to namespace parameters" name:"args" optional:""`
 }
 
 // Run executes the eval command.
 func (e *Eval) Run(ctx context.Context) (err error) {
-	_, cancel := context.WithCancelCause(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 
-	defer func(err *error) {
-		cancel(*err)
-	}(&err)
+	defer func(err *error) { cancel(*err) }(&err)
 
-	var file *os.File
-	if e.Source == "-" {
-		file = os.Stdin
-	} else {
-		var err error
+	ktx := kongContextFrom(ctx)
 
-		file, err = os.Open(e.Source)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
+	cacheDir, ok := ktx.Model.Vars()[CacheIdentifier]
+	if !ok {
+		panic("internal error: unresolved cache directory")
 	}
 
-	// Parse with expression compilation enabled
-	ast, err := lang.ParseReader(
-		bufio.NewReader(file),
-		lang.WithCompileExprs(true),
+	logger := log.With(slog.String("cmd", "eval"))
+	logger.TraceContext(
+		ctx,
+		"eval start",
+		slog.String("name", e.Name),
+		slog.Int("arg_count", len(e.Args)),
 	)
-	if err != nil {
-		return lang.WrapError(err).
-			With(slog.String("command", "eval"))
-	}
 
-	// Evaluate the definition
-	result, err := ast.EvaluateDefinition(e.Name, e.Args)
-	if err != nil {
-		return lang.WrapError(err).
-			With(
-				slog.String("command", "eval"),
-				slog.String("definition", e.Name),
-			)
-	}
-
-	// Print result in native format
-	fmt.Println(lang.FormatResult(result))
-
-	return nil
+	return repl.Run(ctx, sourceFilesFrom(ctx), cacheDir, logger)
 }
+
+//	// Require name for single evaluation
+//	if e.Name == "" {
+//		return NewError("namespace name required")
+//	}
+//
+//	// Parse with expression compilation enabled
+//	ast, err := lang.ParseReader(
+//		reader,
+//		lang.WithCompileExprs(true),
+//	)
+//	if err != nil {
+//		return lang.WrapError(err).
+//			With(slog.String("command", "eval"))
+//	}
+//
+//	// Evaluate the namespace
+//	result, err := ast.EvaluateNamespace(e.Name, e.Args)
+//	if err != nil {
+//		return lang.WrapError(err).
+//			With(
+//				slog.String("command", "eval"),
+//				slog.String("namespace", e.Name),
+//			)
+//	}
+//
+//	// Print result in native format
+//	fmt.Println(lang.FormatResult(result))
+//
+//	return nil
+//}

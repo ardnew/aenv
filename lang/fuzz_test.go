@@ -293,15 +293,16 @@ func FuzzEvaluateExpr(f *testing.F) {
 		}()
 
 		// Parse with expression compilation
-		ast, err := ParseString(input, WithCompileExprs(true))
+		ast, err := ParseString(t.Context(), input, WithCompileExprs(true))
 		if err != nil {
 			return // Parse errors are expected for random input
 		}
 
 		// Try to evaluate each definition without parameters
-		for _, def := range ast.Definitions {
+		for _, def := range ast.Namespaces {
 			if len(def.Parameters) == 0 {
-				_, _ = ast.EvaluateDefinition(
+				_, _ = ast.EvaluateNamespace(
+					t.Context(),
 					def.Identifier.LiteralString(),
 					nil,
 				)
@@ -330,7 +331,7 @@ func FuzzMarshalJSON(f *testing.F) {
 			}
 		}()
 
-		ast, err := ParseString(input)
+		ast, err := ParseString(t.Context(), input)
 		if err != nil {
 			return // Parse errors are expected for random input
 		}

@@ -18,6 +18,17 @@ func Config(opts ...Option) {
 	defaultLog = defaultLog.Wrap(opts...)
 }
 
+// TraceContext logs a message at Trace level using the default logger with the
+// provided context.
+func TraceContext(ctx context.Context, msg string, attrs ...slog.Attr) {
+	defaultLog.TraceContext(ctx, msg, attrs...)
+}
+
+// Trace logs a message at Trace level using the default logger.
+func Trace(msg string, attrs ...slog.Attr) {
+	TraceContext(DefaultContextProvider(), msg, attrs...)
+}
+
 // DebugContext logs a message at Debug level using the default logger with the
 // provided context.
 func DebugContext(ctx context.Context, msg string, attrs ...slog.Attr) {

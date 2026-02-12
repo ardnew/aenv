@@ -16,8 +16,8 @@ import (
 )
 
 type pprofConfig struct {
-	Mode string `default:""            enum:"${pprofModeEnum}" help:"Enable profiling"         placeholder:"${enum}" short:"p"`
-	Dir  string `default:"${pprofDir}"                         help:"Profile output directory"                                 type:"path"`
+	Mode string `default:""            enum:",${pprofModeEnum}" help:"Enable profiling"         placeholder:"${enum}" short:"p"`
+	Dir  string `default:"${pprofDir}"                          help:"Profile output directory"                                 type:"path"`
 }
 
 func (pprofConfig) vars() kong.Vars {

@@ -232,6 +232,7 @@ func TestLogger_AllLevels_LogSuccessfully(t *testing.T) {
 		logFunc func(Logger, string, ...slog.Attr)
 		level   string
 	}{
+		{"trace", Logger.Trace, "trace"},
 		{"debug", Logger.Debug, "debug"},
 		{"info", Logger.Info, "info"},
 		{"warn", Logger.Warn, "warn"},
@@ -241,13 +242,17 @@ func TestLogger_AllLevels_LogSuccessfully(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logger := Make(&buf, WithLevel(LevelDebug))
+			logger := Make(&buf, WithLevel(LevelTrace), WithFormat(FormatText), WithPretty(true))
 
 			tt.logFunc(logger, "test message")
 
 			output := buf.String()
 			if !strings.Contains(output, "test message") {
 				t.Errorf("expected %s message to be logged", tt.level)
+			}
+			// Verify the level string appears correctly (not"DEBUG-4" for trace)
+			if !strings.Contains(output, tt.level) {
+				t.Errorf("expected output to contain level %q, got: %s", tt.level, output)
 			}
 		})
 	}

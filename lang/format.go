@@ -11,11 +11,11 @@ import (
 )
 
 // Format writes the AST in native aenv language syntax to the writer.
-func (ast *AST) Format(w io.Writer, indent int) error {
+func (ast *AST) Format(_ context.Context, w io.Writer, indent int) error {
 	count := 0
-	for _, def := range ast.Definitions {
+	for _, ns := range ast.Namespaces {
 		if count > 0 {
-			// Delimit top-level definitions with semicolon
+			// Delimit top-level namespaces with semicolon
 			if _, err := fmt.Fprint(w, ";"); err != nil {
 				return err
 			}
@@ -35,7 +35,7 @@ func (ast *AST) Format(w io.Writer, indent int) error {
 			}
 		}
 
-		err := formatDefinition(def, w, indent, 0)
+		err := formatNamespace(ns, w, indent, 0)
 		if err != nil {
 			return err
 		}
@@ -50,7 +50,7 @@ func (ast *AST) Format(w io.Writer, indent int) error {
 }
 
 // FormatJSON writes the AST as JSON to the writer.
-func (ast *AST) FormatJSON(w io.Writer, indent int) error {
+func (ast *AST) FormatJSON(_ context.Context, w io.Writer, indent int) error {
 	var (
 		jsonData []byte
 		err      error
@@ -94,14 +94,14 @@ func (ast *AST) FormatYAML(ctx context.Context, w io.Writer, indent int) error {
 	return err
 }
 
-// formatDefinition formats a definition in native aenv syntax.
-func formatDefinition(def *Definition, w io.Writer, indent, depth int) error {
-	if _, err := fmt.Fprint(w, def.Identifier.LiteralString()); err != nil {
+// formatNamespace formats a namespace in native aenv syntax.
+func formatNamespace(ns *Namespace, w io.Writer, indent, depth int) error {
+	if _, err := fmt.Fprint(w, ns.Identifier.LiteralString()); err != nil {
 		return err
 	}
 
-	if len(def.Parameters) > 0 {
-		for _, param := range def.Parameters {
+	if len(ns.Parameters) > 0 {
+		for _, param := range ns.Parameters {
 			if _, err := fmt.Fprint(w, " "); err != nil {
 				return err
 			}
@@ -117,7 +117,7 @@ func formatDefinition(def *Definition, w io.Writer, indent, depth int) error {
 		return err
 	}
 
-	return formatValue(def.Value, w, indent, depth)
+	return formatValue(ns.Value, w, indent, depth)
 }
 
 // formatValue formats a value based on its type.
@@ -135,9 +135,9 @@ func formatValue(v *Value, w io.Writer, indent, depth int) error {
 
 		return nil
 
-	case TypeDefinition:
-		if v.Definition != nil {
-			return formatDefinition(v.Definition, w, indent, depth)
+	case TypeNamespace:
+		if v.Namespace != nil {
+			return formatNamespace(v.Namespace, w, indent, depth)
 		}
 
 		return nil
@@ -167,13 +167,13 @@ func formatTuple(t *Tuple, w io.Writer, indent, depth int) error {
 			return err
 		}
 
-		// If this value is a Definition, write it as key : value
-		if val.Type == TypeDefinition && val.Definition != nil {
-			if _, err := fmt.Fprint(w, val.Definition.Identifier.LiteralString(), " : "); err != nil {
+		// If this value is a Namespace, write it as key : value
+		if val.Type == TypeNamespace && val.Namespace != nil {
+			if _, err := fmt.Fprint(w, val.Namespace.Identifier.LiteralString(), " : "); err != nil {
 				return err
 			}
 
-			err := formatValue(val.Definition.Value, w, indent, depth+1)
+			err := formatValue(val.Namespace.Value, w, indent, depth+1)
 			if err != nil {
 				return err
 			}

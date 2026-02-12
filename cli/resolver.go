@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"io"
 	"strconv"
 	"strings"
@@ -18,8 +19,8 @@ import (
 //	kong.Configuration(load, "/path/to/config")
 //
 // The aenv language structure is converted as follows:
-//   - Each definition scope becomes a flat configuration map
-//   - Definition parameters are ignored (used for environment composition)
+//   - Each namespace scope becomes a flat configuration map
+//   - Namespace parameters are ignored (used for environment composition)
 //   - Flag names with hyphens (e.g., "log-level") should use underscores
 //     in the config file (e.g., "log_level")
 //   - Tuples are converted to nested objects
@@ -43,27 +44,30 @@ import (
 //	--log-pretty=true
 //
 // Command-line flags override config file values.
-func resolve(name string) func(r io.Reader) (kong.Resolver, error) {
+func resolve(
+	ctx context.Context,
+	name string,
+) func(r io.Reader) (kong.Resolver, error) {
 	return func(r io.Reader) (kong.Resolver, error) {
 		// Parse the config file (cached after first parse)
-		ast, err := lang.ParseReader(r)
+		ast, err := lang.ParseReader(ctx, r)
 		if err != nil {
 			// Parse error - return empty config
 			return config{}, nil
 		}
 
-		def, ok := ast.GetDefinition(name)
+		ns, ok := ast.GetNamespace(name)
 		if !ok {
-			// Definition not found - return empty config
+			// Namespace not found - return empty config
 			return config{}, nil
 		}
 
-		if def.Value.Type != lang.TypeTuple {
+		if ns.Value.Type != lang.TypeTuple {
 			// Not a tuple - return empty config
 			return config{}, nil
 		}
 
-		return config(tupleToMap(def.Value.Tuple)), nil
+		return config(tupleToMap(ns.Value.Tuple)), nil
 	}
 }
 
@@ -106,10 +110,10 @@ func tupleToMap(t *lang.Tuple) map[string]any {
 	result := make(map[string]any)
 
 	for _, val := range t.Values {
-		// If this value is a Definition, use its identifier as the key
-		if val.Type == lang.TypeDefinition && val.Definition != nil {
-			key := val.Definition.Identifier.LiteralString()
-			nativeValue := val.Definition.Value.ToNative()
+		// If this value is a Namespace, use its identifier as the key
+		if val.Type == lang.TypeNamespace && val.Namespace != nil {
+			key := val.Namespace.Identifier.LiteralString()
+			nativeValue := val.Namespace.Value.ToNative()
 
 			// Kong requires numbers as strings for parsing
 			if num, ok := nativeValue.(int64); ok {

@@ -2,6 +2,7 @@ package lang
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"io"
 	"log/slog"
@@ -15,7 +16,7 @@ import (
 )
 
 var (
-	// globalCache stores definitions keyed by (source_hash:identifier).
+	// globalCache stores namespaces keyed by (source_hash:identifier).
 	// This allows efficient lookup without keeping full ASTs in memory.
 	globalCache sync.Map
 
@@ -23,10 +24,10 @@ var (
 	globalRegistry sync.Map
 )
 
-// state tracks parsing state and top-level definition list for a source.
+// state tracks parsing state and top-level namespace list for a source.
 type state struct {
 	once        sync.Once
-	identifiers []string // List of definition identifiers found
+	identifiers []string // List of namespace identifiers found
 	err         error
 }
 
@@ -47,7 +48,11 @@ func hashOptions(opts optionsKey) uint64 {
 
 // ParseReader parses input from an io.Reader and returns the AST.
 // The reader content is cached after first parse for efficiency.
-func ParseReader(r io.Reader, opts ...Option) (*AST, error) {
+func ParseReader(
+	ctx context.Context,
+	r io.Reader,
+	opts ...Option,
+) (*AST, error) {
 	// Wrap reader with async read-ahead for concurrent I/O.
 	// This allows data to be pre-fetched while we process previous chunks.
 	ra := readahead.NewReader(r)
@@ -65,16 +70,34 @@ func ParseReader(r io.Reader, opts ...Option) (*AST, error) {
 	applyDefaults(&tempAST)
 	applyOptions(&tempAST, opts...)
 
+	tempAST.logger.TraceContext(
+		ctx,
+		"read input",
+		slog.Int("source_bytes", len(data)),
+		slog.Bool("read_ahead", true),
+	)
+
 	// If options differ from defaults (e.g., compileExprs), bypass cache
 	if tempAST.opts.compileExprs || tempAST.opts.maxDepth != DefaultMaxDepth {
-		return ParseString(string(data), opts...)
+		tempAST.logger.TraceContext(
+			ctx,
+			"cache bypass",
+			slog.Bool("compile_exprs", tempAST.opts.compileExprs),
+			slog.Int("max_depth", tempAST.opts.maxDepth),
+		)
+
+		return ParseString(ctx, string(data), opts...)
 	}
 
-	return parseStringCached(string(data), opts...)
+	return parseStringCached(ctx, string(data), opts...)
 }
 
 // parseStringCached parses a string with caching.
-func parseStringCached(source string, opts ...Option) (*AST, error) {
+func parseStringCached(
+	ctx context.Context,
+	source string,
+	opts ...Option,
+) (*AST, error) {
 	// Build a temporary AST to get effective options
 	var tempAST AST
 
@@ -90,7 +113,7 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 
 	// Get or create metadata entry
 	entry := new(state)
-	value, _ := globalRegistry.LoadOrStore(sourceKey, entry)
+	value, cacheHit := globalRegistry.LoadOrStore(sourceKey, entry)
 
 	metadata, ok := value.(*state)
 	if !ok {
@@ -98,10 +121,18 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 			With(slog.String("issue", "invalid metadata type in cache"))
 	}
 
+	tempAST.logger.TraceContext(
+		ctx,
+		"cache lookup",
+		slog.String("source_hash", strconv.FormatUint(sourceHash, 16)),
+		slog.String("opts_hash", strconv.FormatUint(optsHash, 16)),
+		slog.Bool("cache_hit", cacheHit),
+	)
+
 	// Ensure the source has been parsed
 	metadata.once.Do(func() {
-		// Parse source to extract definitions (bypassing cache)
-		ast, parseErr := parse(lexer.New([]rune(source)), source, opts...)
+		// Parse source to extract namespaces (bypassing cache)
+		ast, parseErr := parse(ctx, lexer.New([]rune(source)), source, opts...)
 		if parseErr != nil {
 			metadata.err = WrapError(parseErr).With(
 				slog.Int("source_length", len(source)),
@@ -110,13 +141,13 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 			return
 		}
 
-		// Cache each definition individually and track identifiers
-		metadata.identifiers = make([]string, len(ast.Definitions))
-		for i, def := range ast.Definitions {
-			id := def.Identifier.LiteralString()
+		// Cache each namespace individually and track identifiers
+		metadata.identifiers = make([]string, len(ast.Namespaces))
+		for i, ns := range ast.Namespaces {
+			id := ns.Identifier.LiteralString()
 			metadata.identifiers[i] = id
 			cacheKey := sourceKey + ":" + id
-			globalCache.Store(cacheKey, def)
+			globalCache.Store(cacheKey, ns)
 		}
 	})
 
@@ -124,9 +155,9 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 		return nil, metadata.err
 	}
 
-	// Reconstruct AST from cached definitions
+	// Reconstruct AST from cached namespaces
 	ast := &AST{
-		Definitions: make([]*Definition, len(metadata.identifiers)),
+		Namespaces: make([]*Namespace, len(metadata.identifiers)),
 	}
 
 	applyDefaults(ast)
@@ -135,8 +166,8 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 	for i, id := range metadata.identifiers {
 		cacheKey := sourceKey + ":" + id
 		if cachedValue, ok := globalCache.Load(cacheKey); ok {
-			if def, ok := cachedValue.(*Definition); ok {
-				ast.Definitions[i] = def
+			if ns, ok := cachedValue.(*Namespace); ok {
+				ast.Namespaces[i] = ns
 			}
 		}
 	}
@@ -144,7 +175,7 @@ func parseStringCached(source string, opts ...Option) (*AST, error) {
 	return ast, nil
 }
 
-// ClearCache removes all cached definitions and source metadata.
+// ClearCache removes all cached namespaces and source metadata.
 // This is primarily useful for testing or when memory needs to be reclaimed.
 func ClearCache() {
 	globalCache = sync.Map{}

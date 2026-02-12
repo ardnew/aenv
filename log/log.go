@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"runtime"
 	"sync"
+	"time"
 )
 
 // Logger provides a concurrency-safe simplified logging interface.
@@ -106,6 +108,20 @@ func (l Logger) Format() Format {
 	return l.format
 }
 
+// TraceContext logs a message at Trace level with the provided context.
+func (l Logger) TraceContext(
+	ctx context.Context,
+	msg string,
+	attrs ...slog.Attr,
+) {
+	l.logContext(ctx, LevelTrace, msg, attrs...)
+}
+
+// Trace logs a message at Trace level.
+func (l Logger) Trace(msg string, attrs ...slog.Attr) {
+	l.TraceContext(DefaultContextProvider(), msg, attrs...)
+}
+
 // DebugContext logs a message at Debug level with the provided context.
 func (l Logger) DebugContext(
 	ctx context.Context,
@@ -182,5 +198,23 @@ func (l Logger) logContext(
 		defer l.mutex.RUnlock()
 	}
 
-	l.LogAttrs(ctx, slog.Level(level), msg, attrs...)
+	// Use the lower-level log method to manually control the call stack skip.
+	// We need to skip 4 frames to get to the actual caller:
+	// 1. logContext (this function)
+	// 2. TraceContext/DebugContext/InfoContext/WarnContext/ErrorContext
+	// 3. Trace/Debug/Info/Warn/Error (optional - only for non-Context variants)
+	// Since slog.Logger doesn't expose PC control directly, we use the Handler
+	// interface with a custom Record that has the correct PC.
+	if !l.Enabled(ctx, slog.Level(level)) {
+		return
+	}
+
+	var pcs [1]uintptr
+	// Skip 4 frames to get to actual caller:
+	// 1=runtime.Callers, 2=logContext, 3=*Context method, 4=package-level wrapper
+	runtime.Callers(4, pcs[:])
+
+	r := slog.NewRecord(time.Now(), slog.Level(level), msg, pcs[0])
+	r.AddAttrs(attrs...)
+	_ = l.Handler().Handle(ctx, r)
 }
