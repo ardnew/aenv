@@ -11,6 +11,7 @@ import (
 // AST is the root of the abstract syntax tree.
 type AST struct {
 	Namespaces []*Namespace
+	index      map[string]*Namespace // O(1) namespace lookup index
 	opts       options
 	logger     log.Logger
 }
@@ -89,6 +90,13 @@ type Position struct {
 
 // GetNamespace returns the namespace with the given name, if it exists.
 func (a *AST) GetNamespace(name string) (*Namespace, bool) {
+	// Use index for O(1) lookup if available
+	if a.index != nil {
+		ns, ok := a.index[name]
+		return ns, ok
+	}
+
+	// Fallback to linear search (e.g., during parsing before index is built)
 	for _, ns := range a.Namespaces {
 		if ns.Name == name {
 			return ns, true
@@ -132,23 +140,41 @@ func (a *AST) All() iter.Seq[*Namespace] {
 
 // DefineNamespace adds or replaces a namespace in the AST.
 func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
-	// Check if namespace already exists
-	for i, ns := range a.Namespaces {
-		if ns.Name == name {
-			// Replace existing
-			a.Namespaces[i] = &Namespace{
-				Name:   name,
-				Params: params,
-				Value:  value,
-			}
-
-			return
-		}
-	}
-	// Add new
-	a.Namespaces = append(a.Namespaces, &Namespace{
+	ns := &Namespace{
 		Name:   name,
 		Params: params,
 		Value:  value,
-	})
+	}
+
+	// Check if namespace already exists
+	for i, existing := range a.Namespaces {
+		if existing.Name == name {
+			// Replace existing
+			a.Namespaces[i] = ns
+			// Update index if it exists
+			if a.index != nil {
+				a.index[name] = ns
+			}
+			return
+		}
+	}
+
+	// Add new
+	a.Namespaces = append(a.Namespaces, ns)
+	// Update index if it exists
+	if a.index != nil {
+		a.index[name] = ns
+	}
+}
+
+// buildIndex creates the namespace lookup index for O(1) access.
+// This is called after parsing is complete.
+func (a *AST) buildIndex() {
+	if len(a.Namespaces) == 0 {
+		return
+	}
+	a.index = make(map[string]*Namespace, len(a.Namespaces))
+	for _, ns := range a.Namespaces {
+		a.index[ns.Name] = ns
+	}
 }

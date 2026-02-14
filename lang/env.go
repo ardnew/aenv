@@ -26,6 +26,10 @@ import (
 var (
 	envCacheOnce sync.Once
 	envCache     map[string]any
+
+	// Process environment cache (only for default os.Environ())
+	processEnvCacheOnce sync.Once
+	processEnvCache     map[string]string
 )
 
 // makeEnvCache returns a clone of the lazily-initialized, process-scoped
@@ -370,23 +374,38 @@ func mungPrefixIf(
 // ---------------------------------------------------------------------------
 
 // buildProcessEnvMap converts a "KEY=VALUE" string slice to a map.
-// If envList is nil, os.Environ() is used.
+// If envList is nil, os.Environ() is used and cached for subsequent calls.
 func buildProcessEnvMap(envList []string, keyVal ...string) map[string]string {
-	envList = append(envList, keyVal...)
-	if len(envList) == 0 {
-		envList = os.Environ()
-	}
-
-	result := make(map[string]string, len(envList))
-
-	for _, entry := range envList {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			result[key] = value
+	// If custom environment provided, build it without caching
+	if len(envList) > 0 || len(keyVal) > 0 {
+		envList = append(envList, keyVal...)
+		if len(envList) == 0 {
+			envList = os.Environ()
 		}
+
+		result := make(map[string]string, len(envList))
+		for _, entry := range envList {
+			key, value, ok := strings.Cut(entry, "=")
+			if ok {
+				result[key] = value
+			}
+		}
+		return result
 	}
 
-	return result
+	// Use cached default process environment (os.Environ())
+	processEnvCacheOnce.Do(func() {
+		envList := os.Environ()
+		processEnvCache = make(map[string]string, len(envList))
+		for _, entry := range envList {
+			key, value, ok := strings.Cut(entry, "=")
+			if ok {
+				processEnvCache[key] = value
+			}
+		}
+	})
+
+	return processEnvCache
 }
 
 // envFunc returns the built-in env() function that provides

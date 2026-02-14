@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/expr-lang/expr/builtin"
 	"github.com/sahilm/fuzzy"
 
 	"github.com/ardnew/aenv/lang"
@@ -398,8 +399,8 @@ func formatValuePreview(v *lang.Value) string {
 // This includes expr-lang builtins and builtin environment functions that are
 // callable (not simple values or namespaces).
 func isFunction(name string) bool {
-	// Check expr-lang builtins
-	if _, ok := exprLangBuiltins[name]; ok {
+	// Check expr-lang builtins using the builtin.Index map
+	if _, ok := builtin.Index[name]; ok {
 		return true
 	}
 

@@ -3,73 +3,299 @@ package repl
 import (
 	"reflect"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/expr-lang/expr/builtin"
 
 	"github.com/ardnew/aenv/lang"
 )
 
-// exprLangBuiltins defines signatures for expr-lang's builtin functions.
-// Source: https://expr-lang.org/docs/language-definition
-var exprLangBuiltins = map[string]struct {
+// signatureCache stores precomputed function signatures to avoid repeated
+// reflection and string building on every keystroke.
+type signatureCache struct {
 	signature string
 	params    []string
-}{
-	"len":    {"len(v)", []string{"v"}},
-	"all":    {"all(array, predicate)", []string{"array", "predicate"}},
-	"any":    {"any(array, predicate)", []string{"array", "predicate"}},
-	"one":    {"one(array, predicate)", []string{"array", "predicate"}},
-	"none":   {"none(array, predicate)", []string{"array", "predicate"}},
-	"map":    {"map(array, mapper)", []string{"array", "mapper"}},
-	"filter": {"filter(array, predicate)", []string{"array", "predicate"}},
-	"find":   {"find(array, predicate)", []string{"array", "predicate"}},
-	"findIndex": {
-		"findIndex(array, predicate)",
-		[]string{"array", "predicate"},
-	},
-	"findLast": {
-		"findLast(array, predicate)",
-		[]string{"array", "predicate"},
-	},
-	"findLastIndex": {
-		"findLastIndex(array, predicate)",
-		[]string{"array", "predicate"},
-	},
-	"groupBy": {"groupBy(array, mapper)", []string{"array", "mapper"}},
-	"sortBy":  {"sortBy(array, mapper)", []string{"array", "mapper"}},
-	"count":   {"count(array, predicate)", []string{"array", "predicate"}},
-	"sum":     {"sum(array)", []string{"array"}},
-	"mean":    {"mean(array)", []string{"array"}},
-	"median":  {"median(array)", []string{"array"}},
-	"min":     {"min(array)", []string{"array"}},
-	"max":     {"max(array)", []string{"array"}},
-	"join":    {"join(array, separator)", []string{"array", "separator"}},
-	"split": {
-		"split(string, separator)",
-		[]string{"string", "separator"},
-	},
-	"replace": {
-		"replace(string, old, new)",
-		[]string{"string", "old", "new"},
-	},
-	"trim":      {"trim(string)", []string{"string"}},
-	"trimLeft":  {"trimLeft(string)", []string{"string"}},
-	"trimRight": {"trimRight(string)", []string{"string"}},
-	"upper":     {"upper(string)", []string{"string"}},
-	"lower":     {"lower(string)", []string{"string"}},
-	"title":     {"title(string)", []string{"string"}},
-	"int":       {"int(v)", []string{"v"}},
-	"float":     {"float(v)", []string{"v"}},
-	"string":    {"string(v)", []string{"v"}},
-	"type":      {"type(v)", []string{"v"}},
+}
+
+var (
+	// exprLangCache caches signatures for expr-lang builtin functions
+	exprLangCache     map[string]signatureCache
+	exprLangCacheOnce sync.Once
+
+	// projectBuiltinCache caches signatures for project builtin functions
+	projectBuiltinCache     map[string]signatureCache
+	projectBuiltinCacheOnce sync.Once
+)
+
+// initExprLangCache initializes the expr-lang builtin signature cache.
+func initExprLangCache() {
+	exprLangCache = make(map[string]signatureCache, len(builtin.Builtins))
+
+	for _, fn := range builtin.Builtins {
+		sig, params, ok := getExprLangBuiltinSignatureUncached(fn.Name)
+		if ok {
+			exprLangCache[fn.Name] = signatureCache{
+				signature: sig,
+				params:    params,
+			}
+		}
+	}
+}
+
+// initProjectBuiltinCache initializes the project builtin signature cache.
+func initProjectBuiltinCache() {
+	projectBuiltinCache = make(map[string]signatureCache)
+
+	// Cache all top-level builtin environment keys
+	env := lang.BuiltinEnvCache()
+
+	for key := range env {
+		// Try common nested paths for each top-level key
+		if m, ok := env[key].(map[string]any); ok {
+			for subkey := range m {
+				fullName := key + "." + subkey
+				sig, params, ok := getBuiltinSignatureUncached(fullName)
+				if ok {
+					projectBuiltinCache[fullName] = signatureCache{
+						signature: sig,
+						params:    params,
+					}
+				}
+			}
+		}
+
+		// Also cache top-level if it's a function
+		sig, params, ok := getBuiltinSignatureUncached(key)
+		if ok {
+			projectBuiltinCache[key] = signatureCache{
+				signature: sig,
+				params:    params,
+			}
+		}
+	}
+}
+
+// getExprLangBuiltinSignature retrieves a cached signature for an expr-lang
+// builtin function. On first call, initializes the cache.
+func getExprLangBuiltinSignature(funcName string) (string, []string, bool) {
+	exprLangCacheOnce.Do(initExprLangCache)
+
+	cached, ok := exprLangCache[funcName]
+	if !ok {
+		return "", nil, false
+	}
+
+	return cached.signature, cached.params, true
+}
+
+// getExprLangBuiltinSignatureUncached extracts the signature for an expr-lang
+// builtin function using reflection. This is the uncached implementation used
+// during cache initialization.
+func getExprLangBuiltinSignatureUncached(funcName string) (string, []string, bool) {
+	// Look up the function in expr-lang's builtin index
+	idx, ok := builtin.Index[funcName]
+	if !ok {
+		return "", nil, false
+	}
+
+	fn := builtin.Builtins[idx]
+
+	// Try to extract parameter information from Types field first (most accurate)
+	if len(fn.Types) > 0 {
+		// Use the first type signature (most common case)
+		firstType := fn.Types[0]
+		if firstType.Kind() == reflect.Func {
+			return extractSignatureFromFuncType(funcName, firstType)
+		}
+	}
+
+	// Fallback: extract from Fast/Func/Safe functions
+	var params []string
+	var funcToInspect any
+
+	switch {
+	case fn.Fast != nil:
+		funcToInspect = fn.Fast
+	case fn.Func != nil:
+		funcToInspect = fn.Func
+	case fn.Safe != nil:
+		funcToInspect = fn.Safe
+	default:
+		// No function to inspect - use special case or generic parameter
+		params = []string{getGenericParamName(funcName, 0)}
+		goto buildSignature
+	}
+
+	// Use reflection on the function to extract parameter types
+	{
+		t := reflect.TypeOf(funcToInspect)
+		if t.Kind() == reflect.Func {
+			numParams := t.NumIn()
+			isVariadic := t.IsVariadic()
+
+			for i := range numParams {
+				paramType := t.In(i)
+
+				var name string
+
+				if isVariadic && i == numParams-1 {
+					// Last parameter of variadic function
+					elemType := paramType.Elem()
+					name = "..." + formatSemanticTypeName(funcName, i, elemType)
+				} else {
+					name = formatSemanticTypeName(funcName, i, paramType)
+				}
+
+				params = append(params, name)
+			}
+		}
+	}
+
+buildSignature:
+	// Build signature string
+	var sig strings.Builder
+	sig.WriteString(funcName)
+	sig.WriteString("(")
+
+	for i, param := range params {
+		if i > 0 {
+			sig.WriteString(", ")
+		}
+
+		sig.WriteString(param)
+	}
+
+	sig.WriteString(")")
+
+	return sig.String(), params, true
+}
+
+// getGenericParamName returns a semantic parameter name for functions that
+// operate on generic types.
+func getGenericParamName(funcName string, paramIdx int) string {
+	// Special cases for well-known functions
+	switch funcName {
+	case "len", "type", "int", "float", "string":
+		return "v"
+	default:
+		return "arg"
+	}
+}
+
+// extractSignatureFromFuncType extracts a function signature from a reflect.Type
+// representing a function. It provides semantic parameter names based on the
+// parameter types.
+func extractSignatureFromFuncType(funcName string, funcType reflect.Type) (string, []string, bool) {
+	if funcType.Kind() != reflect.Func {
+		return "", nil, false
+	}
+
+	var params []string
+	numParams := funcType.NumIn()
+	isVariadic := funcType.IsVariadic()
+
+	for i := range numParams {
+		paramType := funcType.In(i)
+
+		var name string
+
+		if isVariadic && i == numParams-1 {
+			// Last parameter of variadic function
+			elemType := paramType.Elem()
+			name = "..." + formatSemanticTypeName(funcName, i, elemType)
+		} else {
+			name = formatSemanticTypeName(funcName, i, paramType)
+		}
+
+		params = append(params, name)
+	}
+
+	// Build signature string
+	var sig strings.Builder
+	sig.WriteString(funcName)
+	sig.WriteString("(")
+
+	for i, param := range params {
+		if i > 0 {
+			sig.WriteString(", ")
+		}
+
+		sig.WriteString(param)
+	}
+
+	sig.WriteString(")")
+
+	return sig.String(), params, true
+}
+
+// formatSemanticTypeName converts a reflect.Type to a semantic parameter name.
+// This provides better names than formatTypeName by considering the type's
+// structure and the function context.
+func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) string {
+	// Special cases for common expr-lang builtin patterns
+	switch funcName {
+	case "join":
+		if paramIdx == 0 {
+			return "array"
+		}
+		if paramIdx == 1 && t.Kind() == reflect.String {
+			return "separator"
+		}
+	case "split":
+		if paramIdx == 0 {
+			return "string"
+		}
+		if paramIdx == 1 && t.Kind() == reflect.String {
+			return "separator"
+		}
+	}
+
+	// General type-based naming
+	switch t.Kind() {
+	case reflect.Func:
+		// Check if it's a predicate (returns bool)
+		if t.NumOut() > 0 && t.Out(0).Kind() == reflect.Bool {
+			return "predicate"
+		}
+		return "func"
+	case reflect.String:
+		return "string"
+	case reflect.Slice:
+		// Check element type for better naming
+		if t.Elem().Kind() == reflect.Interface {
+			return "array"
+		}
+		return "array"
+	case reflect.Interface:
+		// Generic interface{} - use context-aware name
+		return "v"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "int"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "uint"
+	case reflect.Float32, reflect.Float64:
+		return "float"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Map:
+		return "map"
+	case reflect.Ptr:
+		return formatSemanticTypeName(funcName, paramIdx, t.Elem())
+	default:
+		if t.Name() != "" {
+			return t.Name()
+		}
+		return "arg"
+	}
 }
 
 // ExprLangBuiltinNames returns the names of all expr-lang builtin functions.
 func ExprLangBuiltinNames() []string {
-	names := make([]string, 0, len(exprLangBuiltins))
-	for name := range exprLangBuiltins {
-		names = append(names, name)
+	names := make([]string, 0, len(builtin.Builtins))
+	for _, fn := range builtin.Builtins {
+		names = append(names, fn.Name)
 	}
 
 	return names
@@ -226,12 +452,12 @@ func getSignature(
 		}
 	}
 
-	// Check expr-lang builtin functions
-	if builtin, ok := exprLangBuiltins[funcName]; ok {
-		return builtin.signature, builtin.params
+	// Check expr-lang builtin functions using reflection
+	if sig, params, ok := getExprLangBuiltinSignature(funcName); ok {
+		return sig, params
 	}
 
-	// Check built-in functions using reflection
+	// Check project built-in functions using reflection
 	if sig, params, ok := getBuiltinSignature(funcName); ok {
 		return sig, params
 	}
@@ -239,10 +465,26 @@ func getSignature(
 	return "", nil
 }
 
-// getBuiltinSignature uses reflection to extract the signature of a builtin
-// function from the lang environment cache. Returns (signature, params, true)
-// if found, ("", nil, false) otherwise.
+// getBuiltinSignature retrieves a cached signature for a project builtin
+// function. On first call, initializes the cache.
 func getBuiltinSignature(funcName string) (string, []string, bool) {
+	projectBuiltinCacheOnce.Do(initProjectBuiltinCache)
+
+	cached, ok := projectBuiltinCache[funcName]
+	if !ok {
+		// Not in cache - could be a user-defined namespace that changed
+		// Fall back to uncached lookup
+		return getBuiltinSignatureUncached(funcName)
+	}
+
+	return cached.signature, cached.params, true
+}
+
+// getBuiltinSignatureUncached uses reflection to extract the signature of a
+// builtin function from the lang environment cache. Returns (signature, params,
+// true) if found, ("", nil, false) otherwise. This is the uncached
+// implementation used during cache initialization.
+func getBuiltinSignatureUncached(funcName string) (string, []string, bool) {
 	// Get the builtin environment
 	env := lang.BuiltinEnvCache()
 

@@ -47,6 +47,9 @@ func ParseString(ctx context.Context, s string, opts ...Option) (*AST, error) {
 
 	p.logger = ast.logger
 
+	// Build namespace index for O(1) lookups
+	ast.buildIndex()
+
 	p.logger.TraceContext(ctx, "parse complete",
 		slog.Int("namespace_count", len(ast.Namespaces)))
 
