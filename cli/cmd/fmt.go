@@ -25,7 +25,7 @@ type Native struct {
 func (f *Native) Run(ctx context.Context) error {
 	reader := sourceFilesFrom(ctx)
 	if reader == nil {
-		return NewError("no source files provided")
+		return NewError("require source files")
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -46,7 +46,7 @@ type JSON struct {
 func (j *JSON) Run(ctx context.Context) error {
 	reader := sourceFilesFrom(ctx)
 	if reader == nil {
-		return NewError("no source files provided")
+		return NewError("require source files")
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -67,7 +67,7 @@ type YAML struct {
 func (y *YAML) Run(ctx context.Context) error {
 	reader := sourceFilesFrom(ctx)
 	if reader == nil {
-		return NewError("no source files provided")
+		return NewError("require source files")
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -86,7 +86,7 @@ type AST struct{}
 func (a *AST) Run(ctx context.Context) error {
 	reader := sourceFilesFrom(ctx)
 	if reader == nil {
-		return NewError("no source files provided")
+		return NewError("require source files")
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)

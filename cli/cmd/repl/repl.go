@@ -153,7 +153,6 @@ func Run(
 	ast, err := lang.ParseReader(
 		ctx,
 		reader,
-		lang.WithCompileExprs(true),
 		lang.WithLogger(logger), // AST gets wrapped logger
 	)
 	if err != nil {
@@ -164,6 +163,17 @@ func Run(
 		ctx,
 		"repl ast loaded",
 		slog.Int("namespace_count", len(ast.Namespaces)),
+	)
+
+	// Validate that all non-parameterized namespaces can be evaluated
+	// This catches configuration errors early before starting the REPL
+	if err := ast.ValidateNamespaces(ctx, lang.WithLogger(logger)); err != nil {
+		return err
+	}
+
+	logger.TraceContext(
+		ctx,
+		"repl namespaces validated",
 	)
 
 	history := NewHistory(filepath.Join(cacheDir, baseHistory))
@@ -274,6 +284,10 @@ func (m model) View() string {
 	// Check if we're viewing history
 	viewingHistory := m.historyIdx < m.history.Len()
 
+	// Check if cursor is inside a function call
+	cursor := m.input.Position()
+	funcCall := detectFunctionCall(input, cursor)
+
 	switch {
 	case viewingHistory:
 		// Show history position indicator
@@ -296,6 +310,26 @@ func (m model) View() string {
 
 		b.WriteString(hintStyle.Render(hint))
 		b.WriteString("\n")
+
+	case funcCall.inCall && m.mode == modeEval:
+		// Show function signature hint with current parameter highlighted
+		signature, params := getSignature(m.ast, funcCall.name)
+		if signature != "" {
+			hint := renderSignatureHint(signature, params, funcCall.argIndex)
+			b.WriteString(hint)
+			b.WriteString("\n")
+		} else {
+			// Function not found, show completion bar if available
+			if len(m.matches) > 0 {
+				bar := renderCandidateBar(
+					m.matches, m.suggIdx, m.tabActive, m.width,
+				)
+				b.WriteString(bar)
+				b.WriteString("\n")
+			} else {
+				b.WriteString("\n")
+			}
+		}
 
 	case len(m.matches) > 0:
 		// Render horizontal candidate bar.
@@ -858,7 +892,7 @@ func (m model) listNamespaces() string {
 	var b strings.Builder
 
 	for ns := range m.ast.All() {
-		name := ns.Identifier.LiteralString()
+		name := ns.Name
 		preview := formatPreview(ns)
 		b.WriteString(fmt.Sprintf("  %s %s\n", name, hintStyle.Render(preview)))
 	}

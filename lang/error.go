@@ -3,34 +3,26 @@ package lang
 import (
 	"errors"
 	"log/slog"
-	"slices"
-	"strconv"
 	"strings"
-
-	"github.com/ardnew/aenv/lang/parser"
 )
 
-// Predefined errors (sentinel values).
+// Sentinel errors (structured errors with support for attributes).
 var (
-	ErrNoParseTree      = NewError("parse incomplete")
-	ErrInvalidToken     = NewError("invalid token")
-	ErrAmbiguousParse   = NewError("ambiguous parse")
-	ErrMaxDepthExceeded = NewError("namespace depth exceeded")
-	ErrNotDefined       = NewError("unknown namespace")
-	ErrReadInput        = NewError("read input")
+	ErrParse            = NewError("parse input")
 	ErrExprCompile      = NewError("compile expression")
 	ErrExprEvaluate     = NewError("evaluate expression")
+	ErrNotDefined       = NewError("unknown identifier")
 	ErrParameterCount   = NewError("wrong parameter count")
 	ErrArgumentCount    = NewError("wrong argument count")
-	ErrInvalidValueType = NewError("invalid type")
-	ErrInvalidBoolean   = NewError("invalid boolean")
-	ErrInvalidNumber    = NewError("invalid number")
+	ErrCycle            = NewError("reference cycle")
+	ErrInvalidValueType = NewError("invalid value type")
+	ErrValidation       = NewError("validation failed")
 )
 
-// Error represents an error with optional structured logging attributes.
+// Error is a structured error with optional attributes for structured logging.
 // It implements both error and slog.LogValuer interfaces.
 type Error struct {
-	msg   string
+	msg   string      // Base error message
 	err   error       // Wrapped error (for errors.Unwrap)
 	attrs []slog.Attr // Attributes for structured logging
 }
@@ -75,6 +67,16 @@ func (e *Error) Error() string {
 // Unwrap implements error unwrapping for errors.Is/As.
 func (e *Error) Unwrap() error { return e.err }
 
+// Is implements error matching for errors.Is, matching by message.
+// This allows sentinel errors to match wrapped versions.
+func (e *Error) Is(target error) bool {
+	if te, ok := target.(*Error); ok {
+		return e.msg == te.msg
+	}
+
+	return false
+}
+
 // LogValue implements slog.LogValuer for rich structured logging.
 func (e *Error) LogValue() slog.Value {
 	attrs := make([]slog.Attr, 0, len(e.attrs)+2)
@@ -113,92 +115,12 @@ func (e *Error) With(attrs ...slog.Attr) *Error {
 	}
 }
 
-// ParseError wraps parser errors.
-type ParseError struct {
-	Errors   []*parser.Error
-	Source   string   // The original source input
-	Snippet  string   // Optional snippet of the source
-	Expected []string // Optional expected tokens
-}
-
-func NewParseError(errors []*parser.Error, source string) *ParseError {
-	return &ParseError{
-		Errors:   errors,
-		Source:   source,
-		Snippet:  "",
-		Expected: nil,
-	}
-}
-
-// Error implements the error interface.
-func (e *ParseError) Error() string {
-	if len(e.Errors) == 0 {
-		return "parse error"
-	}
-
-	// If we have the source, format with context
-	if e.Source != "" {
-		msg, snippet, expected := e.formatWithContext()
-		e.Snippet = snippet
-		e.Expected = expected
-
-		return msg + snippet + "\texpected: " + strings.Join(expected, ", ")
-	}
-
-	return e.Errors[0].String()
-}
-
-// formatWithContext formats the parse error with source code context.
-func (e *ParseError) formatWithContext() (string, string, []string) {
-	if len(e.Errors) == 0 {
-		return "parse error", "", nil
-	}
-
-	firstErr := e.Errors[0]
-	lines := strings.Split(e.Source, "\n")
-
-	var buf, src strings.Builder
-
-	// Write error location and description
-	buf.WriteString("parse error at line ")
-	buf.WriteString(strconv.Itoa(firstErr.Line))
-	buf.WriteString(", column ")
-	buf.WriteString(strconv.Itoa(firstErr.Column))
-	buf.WriteString(":\n")
-
-	// Show the offending line if within bounds
-	if firstErr.Line > 0 && firstErr.Line <= len(lines) {
-		lineIdx := firstErr.Line - 1
-		line := lines[lineIdx]
-
-		// Print the line with line number
-		src.WriteString("  ")
-		src.WriteString(strconv.Itoa(firstErr.Line))
-		src.WriteString(" | ")
-		src.WriteString(line)
-		src.WriteRune('\n')
-
-		// Print marker pointing to the column
-		// Calculate the width needed for line number display
-		lineNumWidth := len(strconv.Itoa(firstErr.Line))
-		// +5 accounts for: 2 leading spaces + " | " (3 chars)
-		padding := strings.Repeat(" ", lineNumWidth+5)
-
-		// Add spaces to reach the error column
-		if firstErr.Column > 0 {
-			padding += strings.Repeat(" ", firstErr.Column-1)
-		}
-
-		src.WriteString(padding + "^\n")
-	}
-
-	// Write what was expected
-	exp := []string{}
-	for _, e := range firstErr.Expected {
-		exp = append(exp, strconv.Quote(e))
-	}
-
-	slices.Sort(exp)
-
-	return buf.String(), src.String(), exp
+// WithPosition adds a position attribute to the error for better error
+// messages.
+func (e *Error) WithPosition(pos Position) *Error {
+	return e.With(
+		slog.Int("line", pos.Line),
+		slog.Int("column", pos.Column),
+		slog.Int("offset", pos.Offset),
+	)
 }

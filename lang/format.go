@@ -10,10 +10,10 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// Format writes the AST in native aenv language syntax to the writer.
-func (ast *AST) Format(_ context.Context, w io.Writer, indent int) error {
+// Format writes the AST in native lang2 syntax to the writer.
+func (a *AST) Format(_ context.Context, w io.Writer, indent int) error {
 	count := 0
-	for _, ns := range ast.Namespaces {
+	for _, ns := range a.Namespaces {
 		if count > 0 {
 			// Delimit top-level namespaces with semicolon
 			if _, err := fmt.Fprint(w, ";"); err != nil {
@@ -43,6 +43,13 @@ func (ast *AST) Format(_ context.Context, w io.Writer, indent int) error {
 		count++
 	}
 
+	// Always add trailing semicolon after the last namespace for consistency
+	if len(a.Namespaces) > 0 {
+		if _, err := fmt.Fprint(w, ";"); err != nil {
+			return err
+		}
+	}
+
 	// Final newline
 	_, err := fmt.Fprintln(w)
 
@@ -50,16 +57,16 @@ func (ast *AST) Format(_ context.Context, w io.Writer, indent int) error {
 }
 
 // FormatJSON writes the AST as JSON to the writer.
-func (ast *AST) FormatJSON(_ context.Context, w io.Writer, indent int) error {
+func (a *AST) FormatJSON(_ context.Context, w io.Writer, indent int) error {
 	var (
 		jsonData []byte
 		err      error
 	)
 
 	if indent > 0 {
-		jsonData, err = json.MarshalIndent(ast, "", strings.Repeat(" ", indent))
+		jsonData, err = json.MarshalIndent(a, "", strings.Repeat(" ", indent))
 	} else {
-		jsonData, err = json.Marshal(ast)
+		jsonData, err = json.Marshal(a)
 	}
 
 	if err != nil {
@@ -72,7 +79,7 @@ func (ast *AST) FormatJSON(_ context.Context, w io.Writer, indent int) error {
 }
 
 // FormatYAML writes the AST as YAML to the writer.
-func (ast *AST) FormatYAML(ctx context.Context, w io.Writer, indent int) error {
+func (a *AST) FormatYAML(ctx context.Context, w io.Writer, indent int) error {
 	var opts []yaml.EncodeOption
 	if indent > 0 {
 		opts = append(opts, yaml.Indent(indent))
@@ -83,7 +90,7 @@ func (ast *AST) FormatYAML(ctx context.Context, w io.Writer, indent int) error {
 	// Marshal to YAML
 	yamlData, err := yaml.MarshalContext(
 		ctx,
-		ast.ToMap(),
+		a.ToMap(),
 		opts...)
 	if err != nil {
 		return err
@@ -94,20 +101,66 @@ func (ast *AST) FormatYAML(ctx context.Context, w io.Writer, indent int) error {
 	return err
 }
 
-// formatNamespace formats a namespace in native aenv syntax.
+// Print writes a debug representation of the AST to the writer.
+// This is useful for inspecting the AST structure.
+func (a *AST) Print(_ context.Context, w io.Writer) error {
+	fmt.Fprintf(w, "AST with %d namespaces:\n", len(a.Namespaces))
+
+	for i, ns := range a.Namespaces {
+		fmt.Fprintf(w, "  [%d] %s", i, ns.Name)
+
+		if len(ns.Params) > 0 {
+			fmt.Fprintf(w, " (")
+
+			for j, p := range ns.Params {
+				if j > 0 {
+					fmt.Fprintf(w, ", ")
+				}
+
+				if p.Variadic {
+					fmt.Fprintf(w, "...")
+				}
+
+				fmt.Fprintf(w, "%s", p.Name)
+			}
+
+			fmt.Fprintf(w, ")")
+		}
+
+		fmt.Fprintf(w, " : ")
+
+		if ns.Value != nil {
+			fmt.Fprintf(w, "%s\n", ns.Value.Kind)
+		} else {
+			fmt.Fprintf(w, "nil\n")
+		}
+	}
+
+	return nil
+}
+
+// formatNamespace formats a namespace in native lang2 syntax.
 func formatNamespace(ns *Namespace, w io.Writer, indent, depth int) error {
-	if _, err := fmt.Fprint(w, ns.Identifier.LiteralString()); err != nil {
+	if _, err := fmt.Fprint(w, ns.Name); err != nil {
 		return err
 	}
 
-	if len(ns.Parameters) > 0 {
-		for _, param := range ns.Parameters {
+	// Format parameters
+	if len(ns.Params) > 0 {
+		last := len(ns.Params) - 1
+		for i, param := range ns.Params {
 			if _, err := fmt.Fprint(w, " "); err != nil {
 				return err
 			}
 
-			err := formatValue(param, w, indent, depth)
-			if err != nil {
+			// Prefix the variadic (last) parameter with "..."
+			if i == last && param.Variadic {
+				if _, err := fmt.Fprint(w, "..."); err != nil {
+					return err
+				}
+			}
+
+			if _, err := fmt.Fprint(w, param.Name); err != nil {
 				return err
 			}
 		}
@@ -120,27 +173,24 @@ func formatNamespace(ns *Namespace, w io.Writer, indent, depth int) error {
 	return formatValue(ns.Value, w, indent, depth)
 }
 
-// formatValue formats a value based on its type.
+// formatValue formats a value based on its kind.
 func formatValue(v *Value, w io.Writer, indent, depth int) error {
-	switch v.Type {
-	case TypeIdentifier, TypeNumber, TypeString, TypeExpr, TypeBoolean:
-		_, err := fmt.Fprint(w, v.Token.LiteralString())
+	if v == nil {
+		_, err := fmt.Fprint(w, "nil")
+
+		return err
+	}
+
+	switch v.Kind {
+	case KindExpr:
+		// Expression: write the raw source
+		_, err := fmt.Fprint(w, v.Source)
 
 		return err
 
-	case TypeTuple:
-		if v.Tuple != nil {
-			return formatTuple(v.Tuple, w, indent, depth)
-		}
-
-		return nil
-
-	case TypeNamespace:
-		if v.Namespace != nil {
-			return formatNamespace(v.Namespace, w, indent, depth)
-		}
-
-		return nil
+	case KindBlock:
+		// Block: format as { namespace, ... }
+		return formatBlock(v, w, indent, depth)
 
 	default:
 		_, err := fmt.Fprint(w, "<unknown>")
@@ -149,58 +199,68 @@ func formatValue(v *Value, w io.Writer, indent, depth int) error {
 	}
 }
 
-// formatTuple formats a tuple.
-func formatTuple(t *Tuple, w io.Writer, indent, depth int) error {
+// formatBlock formats a block value.
+func formatBlock(v *Value, w io.Writer, indent, depth int) error {
 	if _, err := fmt.Fprint(w, "{"); err != nil {
 		return err
 	}
 
-	if len(t.Values) > 0 && indent > 0 {
+	if len(v.Entries) > 0 && indent > 0 {
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
 	}
 
-	for i, val := range t.Values {
+	for i, ns := range v.Entries {
 		// Indent
-		if _, err := fmt.Fprint(w, strings.Repeat(" ", (depth+1)*indent)); err != nil {
+		if indent > 0 {
+			if _, err := fmt.Fprint(w, strings.Repeat(" ", (depth+1)*indent)); err != nil {
+				return err
+			}
+		}
+
+		// Format namespace entry
+		if err := formatNamespace(ns, w, indent, depth+1); err != nil {
 			return err
 		}
 
-		// If this value is a Namespace, write it as key : value
-		if val.Type == TypeNamespace && val.Namespace != nil {
-			if _, err := fmt.Fprint(w, val.Namespace.Identifier.LiteralString(), " : "); err != nil {
-				return err
-			}
-
-			err := formatValue(val.Namespace.Value, w, indent, depth+1)
-			if err != nil {
-				return err
-			}
-		} else {
-			// Otherwise just write the value
-			err := formatValue(val, w, indent, depth+1)
-			if err != nil {
-				return err
-			}
-		}
-
-		if indent == 0 {
-			if i < len(t.Values)-1 {
-				if _, err := fmt.Fprint(w, ", "); err != nil {
+		// Add separator (semicolon)
+		if i < len(v.Entries)-1 {
+			// Not the last entry: always add semicolon
+			if indent == 0 {
+				// Compact mode: semicolon + space
+				if _, err := fmt.Fprint(w, "; "); err != nil {
+					return err
+				}
+			} else {
+				// Pretty mode: semicolon + newline
+				if _, err := fmt.Fprintln(w, ";"); err != nil {
 					return err
 				}
 			}
 		} else {
-			// Always add comma for easier editing
-			if _, err := fmt.Fprintln(w, ","); err != nil {
+			// Last entry: always emit trailing semicolon for consistency
+			if _, err := fmt.Fprint(w, ";"); err != nil {
 				return err
+			}
+
+			if indent > 0 {
+				// Pretty mode: add newline after semicolon
+				if _, err := fmt.Fprintln(w); err != nil {
+					return err
+				}
 			}
 		}
 	}
 
 	// Closing brace
-	_, err := fmt.Fprint(w, strings.Repeat(" ", depth*indent), "}")
+	if indent > 0 && len(v.Entries) > 0 {
+		if _, err := fmt.Fprint(w, strings.Repeat(" ", depth*indent)); err != nil {
+			return err
+		}
+	}
+
+	_, err := fmt.Fprint(w, "}")
 
 	return err
 }

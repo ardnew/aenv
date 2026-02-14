@@ -39,7 +39,7 @@ func TestNativeFmtValidSyntax(t *testing.T) {
 		},
 		{
 			name:     "definition with tuple",
-			input:    "test : {a : 1, b : 2}",
+			input:    "test : {a : 1; b : 2}",
 			wantErr:  false,
 			contains: "test :",
 		},
@@ -88,9 +88,9 @@ func TestNativeFmtInvalidSyntax(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "invalid separator",
+			name:    "comma in expression",
 			input:   "ewjw :123   , 12 {};",
-			wantErr: true,
+			wantErr: false, // commas are now part of expressions, not separators
 		},
 		{
 			name:    "missing colon",
@@ -105,12 +105,12 @@ func TestNativeFmtInvalidSyntax(t *testing.T) {
 		{
 			name:    "invalid token",
 			input:   "test : @invalid",
-			wantErr: true,
+			wantErr: false, // lang2 accepts this as an expression (error at eval time)
 		},
 		{
 			name:    "trailing comma",
 			input:   "test : 123,",
-			wantErr: true,
+			wantErr: false, // lang2 allows trailing separators
 		},
 	}
 
@@ -206,9 +206,9 @@ func TestJSONFmtInvalidSyntax(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "invalid separator",
+			name:    "comma in expression",
 			input:   "ewjw :123   , 12 {};",
-			wantErr: true,
+			wantErr: false, // commas are now part of expressions, not separators
 		},
 		{
 			name:    "valid syntax",
@@ -254,9 +254,9 @@ func TestYAMLFmtInvalidSyntax(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "invalid separator",
+			name:    "comma in expression",
 			input:   "ewjw :123   , 12 {};",
-			wantErr: true,
+			wantErr: false, // commas are now part of expressions, not separators
 		},
 		{
 			name:    "valid syntax",
@@ -302,9 +302,9 @@ func TestASTFmtInvalidSyntax(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "invalid separator",
+			name:    "comma in expression",
 			input:   "ewjw :123   , 12 {};",
-			wantErr: true,
+			wantErr: false, // commas are now part of expressions, not separators
 		},
 		{
 			name:    "valid syntax",
@@ -368,7 +368,7 @@ func TestFormatASTOutput(t *testing.T) {
 		},
 		{
 			name:   "tuple with indent",
-			input:  "test : {a : 1, b : 2}",
+			input:  "test : {a : 1; b : 2}",
 			indent: 2,
 			contains: []string{
 				"test :",

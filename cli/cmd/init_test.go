@@ -178,21 +178,21 @@ func TestInitFlagValue(t *testing.T) {
 		flagName  string
 		flagValue any
 		wantNil   bool
-		wantType  lang.Type
+		wantKind  lang.ValueKind
 	}{
 		{
 			name:      "bool_true",
 			flagName:  "flag-bool",
 			flagValue: true,
 			wantNil:   false,
-			wantType:  lang.TypeBoolean,
+			wantKind:  lang.KindExpr,
 		},
 		{
 			name:      "string_value",
 			flagName:  "flag-string",
 			flagValue: "test",
 			wantNil:   false,
-			wantType:  lang.TypeString,
+			wantKind:  lang.KindExpr,
 		},
 		{
 			name:      "empty_string",
@@ -205,21 +205,21 @@ func TestInitFlagValue(t *testing.T) {
 			flagName:  "flag-int",
 			flagValue: 42,
 			wantNil:   false,
-			wantType:  lang.TypeNumber,
+			wantKind:  lang.KindExpr,
 		},
 		{
 			name:      "float_value",
 			flagName:  "flag-float",
 			flagValue: 3.14,
 			wantNil:   false,
-			wantType:  lang.TypeNumber,
+			wantKind:  lang.KindExpr,
 		},
 		{
 			name:      "string_slice",
 			flagName:  "flag-strings",
 			flagValue: []string{"a", "b", "c"},
 			wantNil:   false,
-			wantType:  lang.TypeTuple,
+			wantKind:  lang.KindBlock,
 		},
 		{
 			name:      "empty_slice",
@@ -232,7 +232,7 @@ func TestInitFlagValue(t *testing.T) {
 			flagName:  "flag-ints",
 			flagValue: []int{1, 2, 3},
 			wantNil:   false,
-			wantType:  lang.TypeTuple,
+			wantKind:  lang.KindBlock,
 		},
 	}
 

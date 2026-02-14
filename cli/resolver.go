@@ -62,12 +62,12 @@ func resolve(
 			return config{}, nil
 		}
 
-		if ns.Value.Type != lang.TypeTuple {
-			// Not a tuple - return empty config
+		if ns.Value.Kind != lang.KindBlock {
+			// Not a block - return empty config
 			return config{}, nil
 		}
 
-		return config(tupleToMap(ns.Value.Tuple)), nil
+		return config(blockToMap(ns.Value)), nil
 	}
 }
 
@@ -105,28 +105,25 @@ func (r config) Resolve(
 	return nil, nil
 }
 
-// tupleToMap converts a Tuple to a native map representation.
-func tupleToMap(t *lang.Tuple) map[string]any {
+// blockToMap converts a Block to a native map representation.
+func blockToMap(v *lang.Value) map[string]any {
 	result := make(map[string]any)
 
-	for _, val := range t.Values {
-		// If this value is a Namespace, use its identifier as the key
-		if val.Type == lang.TypeNamespace && val.Namespace != nil {
-			key := val.Namespace.Identifier.LiteralString()
-			nativeValue := val.Namespace.Value.ToNative()
+	if v == nil || v.Kind != lang.KindBlock {
+		return result
+	}
 
-			// Kong requires numbers as strings for parsing
-			if num, ok := nativeValue.(int64); ok {
-				result[key] = strconv.FormatInt(num, 10)
-			} else if num, ok := nativeValue.(float64); ok {
-				result[key] = strconv.FormatFloat(num, 'f', -1, 64)
-			} else {
-				result[key] = nativeValue
-			}
+	for _, ns := range v.Entries {
+		key := ns.Name
+		nativeValue := ns.Value.ToNative()
+
+		// Kong requires numbers as strings for parsing
+		if num, ok := nativeValue.(int64); ok {
+			result[key] = strconv.FormatInt(num, 10)
+		} else if num, ok := nativeValue.(float64); ok {
+			result[key] = strconv.FormatFloat(num, 'f', -1, 64)
 		} else {
-			// Otherwise, it's a value without a key (shouldn't happen in map context)
-			// but handle it gracefully by using the index
-			result[strconv.Itoa(len(result))] = val.ToNative()
+			result[key] = nativeValue
 		}
 	}
 

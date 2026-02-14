@@ -80,7 +80,7 @@ func (i *Init) buildAST(ctx context.Context) *lang.AST {
 
 	ktx := kongContextFrom(ctx)
 
-	var entries []*lang.Value
+	var entries []*lang.Namespace
 
 	prefixIgnore := []string{"help", profile.Tag}
 
@@ -98,7 +98,7 @@ func (i *Init) buildAST(ctx context.Context) *lang.AST {
 	}
 
 	ast := new(lang.AST)
-	ast.DefineNamespace(ConfigIdentifier, nil, lang.NewTuple(entries...))
+	ast.DefineNamespace(ConfigIdentifier, nil, lang.NewBlock(entries...))
 
 	return ast
 }
@@ -124,82 +124,82 @@ func (i *Init) flagValue(ctx context.Context, name string) *lang.Value {
 
 	switch v := val.(type) {
 	case bool:
-		return lang.NewBool(v)
+		return lang.NewExpr(strconv.FormatBool(v))
 
 	case string:
 		if v == "" {
 			return nil
 		}
 
-		return lang.NewString(v)
+		return lang.NewExpr(strconv.Quote(v))
 
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return lang.NewNumber(fmt.Sprint(v))
+		return lang.NewExpr(fmt.Sprint(v))
 
 	case float32, float64:
-		return lang.NewNumber(fmt.Sprint(v))
+		return lang.NewExpr(fmt.Sprint(v))
 
 	case []string:
 		if len(v) == 0 {
 			return nil
 		}
 
-		entries := make([]*lang.Value, len(v))
+		entries := make([]*lang.Namespace, len(v))
 		for i, s := range v {
-			entries[i] = lang.NewString(s)
+			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.Quote(s)))
 		}
 
-		return lang.NewTuple(entries...)
+		return lang.NewBlock(entries...)
 
 	case []int:
 		if len(v) == 0 {
 			return nil
 		}
 
-		entries := make([]*lang.Value, len(v))
+		entries := make([]*lang.Namespace, len(v))
 		for i, n := range v {
-			entries[i] = lang.NewNumber(strconv.Itoa(n))
+			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.Itoa(n)))
 		}
 
-		return lang.NewTuple(entries...)
+		return lang.NewBlock(entries...)
 
 	case []int64:
 		if len(v) == 0 {
 			return nil
 		}
 
-		entries := make([]*lang.Value, len(v))
+		entries := make([]*lang.Namespace, len(v))
 		for i, n := range v {
-			entries[i] = lang.NewNumber(strconv.FormatInt(n, 10))
+			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.FormatInt(n, 10)))
 		}
 
-		return lang.NewTuple(entries...)
+		return lang.NewBlock(entries...)
 
 	case []float64:
 		if len(v) == 0 {
 			return nil
 		}
 
-		entries := make([]*lang.Value, len(v))
+		entries := make([]*lang.Namespace, len(v))
 		for i, n := range v {
-			entries[i] = lang.NewNumber(fmt.Sprint(n))
+			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(fmt.Sprint(n)))
 		}
 
-		return lang.NewTuple(entries...)
+		return lang.NewBlock(entries...)
 
 	case []bool:
 		if len(v) == 0 {
 			return nil
 		}
 
-		entries := make([]*lang.Value, len(v))
+		entries := make([]*lang.Namespace, len(v))
 		for i, b := range v {
-			entries[i] = lang.NewBool(b)
+			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.FormatBool(b)))
 		}
 
-		return lang.NewTuple(entries...)
+		return lang.NewBlock(entries...)
 
 	default:
-		return lang.NewString(fmt.Sprint(v))
+		return lang.NewExpr(strconv.Quote(fmt.Sprint(v)))
 	}
 }

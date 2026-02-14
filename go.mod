@@ -10,16 +10,14 @@ tool (
 
 require (
 	github.com/alecthomas/kong v1.13.0
+	github.com/ardnew/mung v0.4.0
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/expr-lang/expr v1.17.7
-	github.com/goccmack/goutil v1.2.3
 	github.com/goccy/go-yaml v1.19.1
-	github.com/klauspost/readahead v1.4.0
 	github.com/pkg/profile v1.7.0
 	github.com/sahilm/fuzzy v0.1.1
-	github.com/zeebo/xxh3 v1.1.0
 )
 
 require (
@@ -32,9 +30,9 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/goccmack/gogll/v3 v3.4.1 // indirect
+	github.com/goccmack/goutil v1.2.3 // indirect
 	github.com/google/pprof v0.0.0-20251114195745-4902fdda35c8 // indirect
 	github.com/iancoleman/strcase v0.1.3 // indirect
-	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

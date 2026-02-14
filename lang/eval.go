@@ -2,6 +2,7 @@ package lang
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -20,15 +21,15 @@ import (
 //
 // Options are applied as overrides to ast.opts for this evaluation only,
 // enabling thread-safe concurrent evaluations with different processEnv.
-func (ast *AST) EvaluateNamespace(
+func (a *AST) EvaluateNamespace(
 	ctx context.Context,
 	name string,
 	args []string,
 	opts ...Option,
 ) (any, error) {
 	// Copy ast.opts locally for thread-safe concurrent evaluation
-	local := ast.opts
-	logger := ast.logger
+	local := a.opts
+	logger := a.logger
 
 	for _, opt := range opts {
 		// Apply option to a temporary AST to extract the setting
@@ -48,30 +49,66 @@ func (ast *AST) EvaluateNamespace(
 		slog.Int("arg_count", len(args)),
 	)
 
-	ns, found := ast.GetNamespace(name)
+	ns, found := a.GetNamespace(name)
 	if !found {
 		return nil, ErrNotDefined.
 			With(slog.String("name", name))
 	}
 
-	if len(args) != len(ns.Parameters) {
+	// Check if namespace is parameterized
+	if len(ns.Params) == 0 && len(args) > 0 {
 		return nil, ErrParameterCount.
 			With(
 				slog.String("name", name),
-				slog.Int("expected", len(ns.Parameters)),
+				slog.Int("expected", 0),
+				slog.Int("got", len(args)),
+			)
+	}
+
+	// Validate argument count
+	var variadic bool
+	if len(ns.Params) > 0 {
+		variadic = ns.Params[len(ns.Params)-1].Variadic
+	}
+
+	if variadic {
+		required := len(ns.Params) - 1
+		if len(args) < required {
+			return nil, ErrParameterCount.
+				With(
+					slog.String("name", name),
+					slog.Int("min_expected", required),
+					slog.Int("got", len(args)),
+				)
+		}
+	} else if len(args) != len(ns.Params) {
+		return nil, ErrParameterCount.
+			With(
+				slog.String("name", name),
+				slog.Int("expected", len(ns.Params)),
 				slog.Int("got", len(args)),
 			)
 	}
 
 	processEnv := buildProcessEnvMap(local.processEnv)
 
-	// Build parameter bindings map by parsing each argument as a Value
-	params := make(map[string]*Value, len(args))
+	// Build parameter bindings map by parsing each argument as an expression.
+	// For variadic namespaces, the last parameter collects all remaining
+	// arguments into a slice.
+	params := make(map[string]any, len(ns.Params))
 
-	for i, param := range ns.Parameters {
-		if param.Token != nil {
-			paramName := param.Token.LiteralString()
-			params[paramName] = ast.parseArgToValue(ctx, args[i])
+	last := len(ns.Params) - 1
+	for i, param := range ns.Params {
+		if variadic && i == last {
+			// Collect remaining args into a slice
+			rest := make([]any, 0, len(args)-i)
+			for _, arg := range args[i:] {
+				rest = append(rest, parseArgToAny(arg))
+			}
+
+			params[param.Name] = rest
+		} else {
+			params[param.Name] = parseArgToAny(args[i])
 		}
 	}
 
@@ -81,18 +118,16 @@ func (ast *AST) EvaluateNamespace(
 		slog.Any("params", sortedKeys(params)),
 	)
 
-	// Build evaluation context from AST scope
+	// Build evaluation context
 	ectx := &evalContext{
 		get:        func() context.Context { return ctx },
-		ast:        ast,
+		ast:        a,
 		processEnv: processEnv,
 		params:     params,
 		logger:     logger,
 	}
 
-	return ectx.evaluateValue(
-		ns.Value,
-	)
+	return ectx.evaluateValue(ns.Value)
 }
 
 // EvaluateExpr compiles and executes an expr-lang expression using the AST's
@@ -101,14 +136,14 @@ func (ast *AST) EvaluateNamespace(
 // available.
 //
 // Options are applied as overrides to ast.opts for this evaluation only.
-func (ast *AST) EvaluateExpr(
+func (a *AST) EvaluateExpr(
 	ctx context.Context,
 	source string,
 	opts ...Option,
 ) (any, error) {
 	// Copy ast.opts locally for thread-safe concurrent evaluation
-	local := ast.opts
-	logger := ast.logger
+	local := a.opts
+	logger := a.logger
 
 	for _, opt := range opts {
 		var temp AST
@@ -122,77 +157,56 @@ func (ast *AST) EvaluateExpr(
 
 	processEnv := buildProcessEnvMap(local.processEnv)
 
-	// Build compile-time environment using type exemplars from the AST.
-	topScope := scope{ns: ast.Namespaces, params: nil}
-	compileEnv := buildExprEnv(ctx, []scope{topScope}, processEnv, ast.logger)
-
 	logger.TraceContext(
 		ctx,
 		"eval expr",
 		slog.String("source", source),
-		slog.Any("compile_env_keys", sortedKeys(compileEnv)),
 	)
 
+	// Build evaluation context
+	ectx := &evalContext{
+		get:        func() context.Context { return ctx },
+		ast:        a,
+		processEnv: processEnv,
+		params:     make(map[string]any),
+		logger:     logger,
+	}
+
+	// Build runtime environment with actual resolved values
+	runtimeEnv := ectx.buildRuntimeEnv()
+
+	logger.TraceContext(
+		ctx,
+		"runtime env keys",
+		slog.Any("keys", sortedKeys(runtimeEnv)),
+	)
+
+	// Set up patchers
 	patcher := &hyphenPatcher{
-		namespaces: ast.Namespaces,
-		env:        compileEnv,
+		namespaces: a.Namespaces,
+		env:        runtimeEnv,
 		logger:     logger,
 	}
 
 	program, err := expr.Compile(
-		source, expr.Env(compileEnv), expr.Patch(patcher),
+		source,
+		expr.Env(runtimeEnv),
+		expr.Patch(patcher),
 	)
 	if err != nil {
-		// If the error is due to expr-valued namespaces in scope (unknown
-		// types at compile time), fall back to lazy compilation using the
-		// runtime environment where expr values are fully resolved.
-		topScopes := []scope{topScope}
-		if !scopesHaveExprValues(topScopes, nil) {
-			return nil, ErrExprCompile.Wrap(err).
-				With(slog.String("source", source))
-		}
-
-		logger.TraceContext(
-			ctx,
-			"eval expr deferred compile",
-			slog.String("source", source),
-		)
-
-		program = nil
-	}
-
-	// Build runtime environment with actual resolved values.
-	ectx := &evalContext{
-		get:        func() context.Context { return ctx },
-		ast:        ast,
-		processEnv: processEnv,
-		params:     make(map[string]*Value),
-		logger:     logger,
-	}
-	runtimeEnv := ectx.buildRuntimeEnv()
-
-	// If compilation was deferred, compile now with the runtime environment
-	// where expr-valued namespaces have been fully resolved.
-	if program == nil {
-		runtimePatcher := &hyphenPatcher{
-			namespaces: ast.Namespaces,
-			env:        runtimeEnv,
-			logger:     logger,
-		}
-
-		program, err = expr.Compile(
-			source, expr.Env(runtimeEnv), expr.Patch(runtimePatcher),
-		)
-		if err != nil {
-			return nil, ErrExprCompile.Wrap(err).
-				With(slog.String("source", source))
-		}
+		return nil, ErrExprCompile.Wrap(err).
+			With(slog.String("source", source))
 	}
 
 	result, err := vm.Run(program, runtimeEnv)
 	if err != nil {
-		return nil, ErrExprEvaluate.Wrap(err).
+		return nil, enhanceFunctionError(err, source, a).
 			With(slog.String("source", source))
+	}
+
+	// If result is a function, return nil (like expr-lang builtins)
+	if isFunction(result) {
+		result = nil
 	}
 
 	logger.TraceContext(
@@ -206,11 +220,11 @@ func (ast *AST) EvaluateExpr(
 
 // evalContext holds the state for recursive evaluation.
 type evalContext struct {
-	get        func() context.Context // allows for cancellation and timeouts in recursive calls
+	get        func() context.Context // allows for cancellation and timeouts
 	ast        *AST
 	processEnv map[string]string
-	params     map[string]*Value
-	logger     log.Logger          // structured logger for trace-level debugging
+	params     map[string]any      // parameter bindings
+	logger     log.Logger          // structured logger
 	resolving  map[*Value]struct{} // cycle detection for resolveForEnv
 }
 
@@ -223,143 +237,26 @@ func (ctx *evalContext) evaluateValue(v *Value) (any, error) {
 	ctx.logger.TraceContext(
 		ctx.get(),
 		"eval dispatch",
-		slog.String("value_type", v.Type.String()),
+		slog.String("value_kind", v.Kind.String()),
 	)
 
-	switch v.Type {
-	case TypeBoolean:
-		return ctx.evaluateBoolean(v)
-
-	case TypeNumber:
-		return ctx.evaluateNumber(v)
-
-	case TypeString:
-		return ctx.evaluateString(v)
-
-	case TypeIdentifier:
-		return ctx.evaluateIdentifier(v)
-
-	case TypeExpr:
+	switch v.Kind {
+	case KindExpr:
 		return ctx.evaluateExpr(v)
 
-	case TypeTuple:
-		return ctx.evaluateTuple(v)
-
-	case TypeNamespace:
-		return ctx.evaluateNamespace(v)
+	case KindBlock:
+		return ctx.evaluateBlock(v)
 
 	default:
 		return nil, ErrInvalidValueType.
-			With(slog.String("type", v.Type.String()))
+			With(slog.String("kind", v.Kind.String()))
 	}
 }
 
-// evaluateBoolean evaluates a boolean literal.
-func (ctx *evalContext) evaluateBoolean(v *Value) (bool, error) {
-	if v.Token == nil {
-		return false, nil
-	}
-
-	s := v.Token.LiteralString()
-
-	result, err := strconv.ParseBool(s)
-	if err != nil {
-		return false, ErrInvalidBoolean.Wrap(err).
-			With(slog.String("value", s))
-	}
-
-	return result, nil
-}
-
-// evaluateNumber evaluates a number literal.
-func (ctx *evalContext) evaluateNumber(v *Value) (any, error) {
-	if v.Token == nil {
-		return int64(0), nil
-	}
-
-	s := v.Token.LiteralString()
-
-	// Try int first
-	if i, err := strconv.ParseInt(s, 0, 64); err == nil {
-		return i, nil
-	}
-
-	// Fall back to float
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return f, nil
-	}
-
-	return nil, ErrInvalidNumber.
-		With(slog.String("value", s))
-}
-
-// evaluateString evaluates a string literal.
-func (ctx *evalContext) evaluateString(v *Value) (string, error) {
-	if v.Token == nil {
-		return "", nil
-	}
-
-	s := v.Token.LiteralString()
-
-	// Remove surrounding quotes if present
-	if len(s) >= 2 {
-		first, last := s[0], s[len(s)-1]
-		if (first == '"' && last == '"') ||
-			(first == '\'' && last == '\'') ||
-			(first == '`' && last == '`') {
-			if unquoted, err := strconv.Unquote(s); err == nil {
-				return unquoted, nil
-			}
-		}
-	}
-
-	return s, nil
-}
-
-// evaluateIdentifier resolves an identifier reference.
-func (ctx *evalContext) evaluateIdentifier(v *Value) (any, error) {
-	if v.Token == nil {
-		return nil, nil
-	}
-
-	name := v.Token.LiteralString()
-
-	// Check parameters first
-	if paramVal, ok := ctx.params[name]; ok {
-		ctx.logger.TraceContext(
-			ctx.get(),
-			"resolve identifier",
-			slog.String("name", name),
-			slog.String("resolved_from", "params"),
-		)
-
-		// Evaluate the parameter's parsed Value
-		return ctx.evaluateValue(paramVal)
-	}
-
-	// Check AST namespaces
-	ns, found := ctx.ast.GetNamespace(name)
-	if !found {
-		return nil, ErrNotDefined.
-			With(slog.String("name", name))
-	}
-
-	ctx.logger.TraceContext(
-		ctx.get(),
-		"resolve identifier",
-		slog.String("name", name),
-		slog.String("resolved_from", "ast"),
-	)
-
-	// Evaluate the referenced namespace's value
-	return ctx.evaluateValue(ns.Value)
-}
-
-// evaluateExpr runs a compiled expr program.
-// If the program wasn't compiled (e.g., due to unknown parameter types),
-// it compiles lazily at evaluation time with actual parameter types.
+// evaluateExpr evaluates an expression value by compiling and running it
+// with expr-lang.
 func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
-	source := v.ExprSource()
+	source := v.Source
 
 	// Skip empty expressions
 	if source == "" {
@@ -369,39 +266,39 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	// Build runtime environment with resolved parameter values
 	env := ctx.buildRuntimeEnv()
 
-	// If program is nil, compile lazily with actual types from env
-	program := v.Program
-	lazyCompile := program == nil
 	ctx.logger.TraceContext(
 		ctx.get(),
-		"eval expr run",
+		"eval expr",
 		slog.String("source", source),
-		slog.Bool("lazy_compile", lazyCompile),
 		slog.Any("env_keys", sortedKeys(env)),
 	)
 
-	if program == nil {
-		patcher := &hyphenPatcher{
-			namespaces: ctx.ast.Namespaces,
-			env:        env,
-			logger:     ctx.logger,
-		}
+	// Set up patchers
+	patcher := &hyphenPatcher{
+		namespaces: ctx.ast.Namespaces,
+		env:        env,
+		logger:     ctx.logger,
+	}
 
-		var err error
-
-		program, err = expr.Compile(
-			source, expr.Env(env), expr.Patch(patcher),
-		)
-		if err != nil {
-			return nil, ErrExprCompile.Wrap(err).
-				With(slog.String("source", source))
-		}
+	program, err := expr.Compile(
+		source,
+		expr.Env(env),
+		expr.Patch(patcher),
+	)
+	if err != nil {
+		return nil, ErrExprCompile.Wrap(err).
+			With(slog.String("source", source))
 	}
 
 	result, err := vm.Run(program, env)
 	if err != nil {
-		return nil, ErrExprEvaluate.Wrap(err).
+		return nil, enhanceFunctionError(err, source, ctx.ast).
 			With(slog.String("source", source))
+	}
+
+	// If result is a function, return nil (like expr-lang builtins)
+	if isFunction(result) {
+		result = nil
 	}
 
 	ctx.logger.TraceContext(
@@ -413,139 +310,97 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	return result, nil
 }
 
-// evaluateTuple evaluates a tuple of values.
-func (ctx *evalContext) evaluateTuple(v *Value) (any, error) {
-	if v.Tuple == nil {
-		return nil, nil
+// evaluateBlock evaluates a block value to a map[string]any.
+// The block's namespace entries can reference each other (sibling scope).
+func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
+	if v.Entries == nil {
+		return make(map[string]any), nil
 	}
 
-	// Check if all elements are namespaces
-	allNamespaces := true
+	ctx.logger.TraceContext(
+		ctx.get(),
+		"eval block",
+		slog.Int("entry_count", len(v.Entries)),
+	)
 
-	for _, val := range v.Tuple.Values {
-		if val.Type != TypeNamespace {
-			allNamespaces = false
+	// Create a child context with the block's namespace scope.
+	// This allows expressions within the block to reference sibling namespaces.
+	childCtx := &evalContext{
+		get:        ctx.get,
+		ast:        ctx.ast,
+		processEnv: ctx.processEnv,
+		params:     make(map[string]any),
+		logger:     ctx.logger,
+		resolving:  ctx.resolving,
+	}
 
-			break
+	// Copy parent params
+	maps.Copy(childCtx.params, ctx.params)
+
+	// Add block-scoped namespaces to child context as parameters.
+	// This enables sibling references like: { x : 1; y : x + 1 }
+	// Only add non-parameterized namespaces to avoid circular evaluation.
+	for _, ns := range v.Entries {
+		if len(ns.Params) == 0 {
+			// Add as a resolvable parameter
+			childCtx.params[ns.Name] = childCtx.resolveForEnv(ns.Value)
 		}
 	}
 
 	ctx.logger.TraceContext(
 		ctx.get(),
-		"eval tuple",
-		slog.Int("element_count", len(v.Tuple.Values)),
-		slog.Bool("all_namespaces", allNamespaces),
+		"block scope",
+		slog.Any("scope_keys", sortedKeys(childCtx.params)),
 	)
 
-	if allNamespaces && len(v.Tuple.Values) > 0 {
-		// First pass: build a map of tuple-scoped namespace values
-		// This allows expressions to reference sibling namespaces
-		tupleScope := make(map[string]*Value)
+	// Evaluate all namespaces with the enriched context
+	result := make(map[string]any, len(v.Entries))
 
-		for _, val := range v.Tuple.Values {
-			if val.Namespace != nil {
-				name := val.Namespace.Identifier.LiteralString()
-				// Only include non-expression values in the scope
-				// to avoid circular evaluation
-				if val.Namespace.Value != nil &&
-					val.Namespace.Value.Type != TypeExpr {
-					tupleScope[name] = val.Namespace.Value
-				}
-			}
-		}
-
-		ctx.logger.TraceContext(
-			ctx.get(),
-			"tuple scope",
-			slog.Any("scope_keys", sortedKeys(tupleScope)),
-		)
-
-		// Create a child context with the tuple scope
-		childCtx := &evalContext{
-			get:        ctx.get,
-			ast:        ctx.ast,
-			processEnv: ctx.processEnv,
-			params:     make(map[string]*Value),
-			resolving:  ctx.resolving,
-		}
-
-		// Copy parent params
-		maps.Copy(childCtx.params, ctx.params)
-
-		// Add tuple scope to child params
-		maps.Copy(childCtx.params, tupleScope)
-
-		// Second pass: evaluate all namespaces with the enriched context
-		result := make(map[string]any)
-
-		for _, val := range v.Tuple.Values {
-			if val.Namespace != nil {
-				name := val.Namespace.Identifier.LiteralString()
-
-				evaluated, err := childCtx.evaluateValue(val.Namespace.Value)
-				if err != nil {
-					return nil, err
-				}
-
-				result[name] = evaluated
-			}
-		}
-
-		return result, nil
-	}
-
-	// Mixed tuple or all literals: return as slice
-	result := make([]any, 0, len(v.Tuple.Values))
-
-	for _, val := range v.Tuple.Values {
-		evaluated, err := ctx.evaluateValue(val)
+	for _, ns := range v.Entries {
+		evaluated, err := childCtx.evaluateValue(ns.Value)
 		if err != nil {
 			return nil, err
 		}
 
-		result = append(result, evaluated)
+		result[ns.Name] = evaluated
 	}
 
 	return result, nil
 }
 
-// evaluateNamespace evaluates a nested namespace.
-func (ctx *evalContext) evaluateNamespace(v *Value) (any, error) {
-	if v.Namespace == nil {
-		return nil, nil
-	}
-
-	return ctx.evaluateValue(v.Namespace.Value)
-}
-
 // buildRuntimeEnv constructs the environment for expr execution.
 func (ctx *evalContext) buildRuntimeEnv() map[string]any {
-	env := make(map[string]any)
+	// Start with built-in environment
+	env := makeEnvCache()
 
-	// Add parameters first (they take precedence)
-	// Resolve each *Value to a Go value for the expr environment
-	for name, paramVal := range ctx.params {
-		env[name] = ctx.resolveForEnv(paramVal)
-	}
+	// Add parameters first (they take precedence and shadow builtins)
+	maps.Copy(env, ctx.params)
 
-	// Add top-level namespaces
-	// For simple values, we can evaluate them directly
-	// For expr values, we provide nil to avoid infinite recursion
-	// For namespaces with parameters, add them as callable functions
+	// Add top-level namespaces from the AST.
+	// For non-parameterized namespaces, we try to resolve their values.
+	// For parameterized namespaces, we add them as callable functions.
+	// Namespace patching will optimize constant-valued namespaces.
+	resolved := make(map[string]any)
+
 	for _, ns := range ctx.ast.Namespaces {
-		name := ns.Identifier.LiteralString()
-		if _, exists := env[name]; !exists {
-			if len(ns.Parameters) > 0 {
-				// Add as a callable function
-				env[name] = ctx.makeNamespaceFunc(ns)
-			} else {
-				env[name] = ctx.resolveForEnv(ns.Value)
-			}
+		// Skip if already in env (shadowed by params)
+		if _, exists := env[ns.Name]; exists {
+			continue
+		}
+
+		if len(ns.Params) > 0 {
+			// Parameterized namespace: add as callable function
+			env[ns.Name] = ctx.makeNamespaceFunc(ns)
+		} else {
+			// Non-parameterized: resolve value for patching
+			val := ctx.resolveForEnv(ns.Value)
+			env[ns.Name] = val
+			resolved[ns.Name] = val
 		}
 	}
 
-	// Add env function
-	env["env"] = envFunc(ctx.processEnv)
+	// Add env map for access to process environment variables
+	env["env"] = ctx.processEnv
 
 	ctx.logger.TraceContext(
 		ctx.get(),
@@ -558,12 +413,8 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 	return env
 }
 
-// makeNamespaceFunc creates a callable function for a namespace with
-// parameters.
+// makeNamespaceFunc creates a callable function for a parameterized namespace.
 // This allows parameterized namespaces to be called from within expressions.
-// The returned closure creates a child evalContext that inherits the
-// resolving set from the parent, preventing infinite recursion when
-// evaluating cross-referencing expr-valued namespaces.
 func (ctx *evalContext) makeNamespaceFunc(
 	ns *Namespace,
 ) func(...any) (any, error) {
@@ -571,33 +422,52 @@ func (ctx *evalContext) makeNamespaceFunc(
 		ctx.logger.TraceContext(
 			ctx.get(),
 			"call namespace func",
-			slog.String("name", ns.Identifier.LiteralString()),
+			slog.String("name", ns.Name),
 			slog.Int("arg_count", len(args)),
 		)
 
-		if len(args) != len(ns.Parameters) {
+		// Check if namespace is variadic
+		var variadic bool
+		if len(ns.Params) > 0 {
+			variadic = ns.Params[len(ns.Params)-1].Variadic
+		}
+
+		// Validate argument count
+		if variadic {
+			required := len(ns.Params) - 1
+			if len(args) < required {
+				return nil, ErrArgumentCount.
+					With(
+						slog.String("name", ns.Name),
+						slog.String("signature", formatNamespaceSignature(ns)),
+						slog.Int("min_expected", required),
+						slog.Int("got", len(args)),
+					)
+			}
+		} else if len(args) != len(ns.Params) {
 			return nil, ErrArgumentCount.
 				With(
-					slog.String("name", ns.Identifier.LiteralString()),
-					slog.Int("expected", len(ns.Parameters)),
+					slog.String("name", ns.Name),
+					slog.String("signature", formatNamespaceSignature(ns)),
+					slog.Int("expected", len(ns.Params)),
 					slog.Int("got", len(args)),
 				)
 		}
 
-		// Build parameter bindings by converting args to Values
-		params := make(map[string]*Value, len(args))
+		// Build parameter bindings
+		params := make(map[string]any, len(ns.Params))
 
-		for i, param := range ns.Parameters {
-			if param.Token != nil {
-				paramName := param.Token.LiteralString()
-				params[paramName] = ctx.ast.parseArgToValue(
-					ctx.get(), anyToArgString(args[i]),
-				)
+		last := len(ns.Params) - 1
+		for i, param := range ns.Params {
+			if variadic && i == last {
+				// Collect remaining args into a slice
+				params[param.Name] = args[i:]
+			} else {
+				params[param.Name] = args[i]
 			}
 		}
 
-		// Create a child evalContext that inherits the resolving set,
-		// preventing cycles when buildRuntimeEnv resolves expr values.
+		// Create a child evalContext with parameter bindings
 		childCtx := &evalContext{
 			get:        ctx.get,
 			ast:        ctx.ast,
@@ -611,138 +481,35 @@ func (ctx *evalContext) makeNamespaceFunc(
 	}
 }
 
-// anyToArgString converts a Go value to a string suitable for parseArgToValue.
-func anyToArgString(v any) string {
-	switch val := v.(type) {
-	case nil:
-		return ""
-
-	case bool:
-		return strconv.FormatBool(val)
-
-	case int:
-		return strconv.Itoa(val)
-
-	case int64:
-		return strconv.FormatInt(val, 10)
-
-	case float64:
-		return strconv.FormatFloat(val, 'f', -1, 64)
-
-	case string:
-		// Quote if it contains special characters
-		if needsQuoting(val) {
-			return strconv.Quote(val)
-		}
-
-		return val
-
-	case []any:
-		return formatSlice(val)
-
-	case map[string]any:
-		return formatMap(val)
-
-	default:
-		return fmt.Sprintf("%v", val)
-	}
-}
-
 // resolveForEnv converts a Value to a Go value suitable for the expr
-// environment.
-// This avoids infinite recursion by not evaluating expressions.
+// environment. This avoids infinite recursion by tracking values being
+// resolved and returning nil for cycles.
 func (ctx *evalContext) resolveForEnv(v *Value) any {
 	if v == nil {
 		return nil
 	}
 
-	switch v.Type {
-	case TypeBoolean:
-		if v.Token == nil {
-			return false
-		}
+	// Cycle detection
+	if ctx.resolving == nil {
+		ctx.resolving = make(map[*Value]struct{})
+	}
 
-		result, _ := strconv.ParseBool(v.Token.LiteralString())
-
-		return result
-
-	case TypeNumber:
-		if v.Token == nil {
-			return int64(0)
-		}
-
-		s := v.Token.LiteralString()
-		if i, err := strconv.ParseInt(s, 0, 64); err == nil {
-			return i
-		}
-
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			return f
-		}
-
-		return int64(0)
-
-	case TypeString:
-		if v.Token == nil {
-			return ""
-		}
-
-		s := v.Token.LiteralString()
-		if len(s) >= 2 {
-			first, last := s[0], s[len(s)-1]
-			if (first == '"' && last == '"') ||
-				(first == '\'' && last == '\'') ||
-				(first == '`' && last == '`') {
-				if unquoted, err := strconv.Unquote(s); err == nil {
-					return unquoted
-				}
-			}
-		}
-
-		return s
-
-	case TypeIdentifier:
-		// Look up the identifier
-		if v.Token == nil {
-			return nil
-		}
-
-		name := v.Token.LiteralString()
-
-		// Check parameters first (now *Value)
-		if paramVal, ok := ctx.params[name]; ok {
-			return ctx.resolveForEnv(paramVal)
-		}
-
-		// Check namespaces (but don't recurse into exprs)
-		if ns, ok := ctx.ast.GetNamespace(name); ok {
-			return ctx.resolveForEnv(ns.Value)
-		}
-
+	if _, cycling := ctx.resolving[v]; cycling {
 		return nil
+	}
 
-	case TypeExpr:
-		// Evaluate the expr if not already resolving it (cycle detection).
-		// This allows non-cyclic expr references to be fully resolved in the
-		// runtime environment, while returning nil for cycles to prevent
-		// infinite recursion.
-		if ctx.resolving == nil {
-			ctx.resolving = make(map[*Value]struct{})
-		}
+	ctx.resolving[v] = struct{}{}
+	defer delete(ctx.resolving, v)
 
-		if _, cycling := ctx.resolving[v]; cycling {
-			return nil
-		}
-
-		ctx.resolving[v] = struct{}{}
-		defer delete(ctx.resolving, v)
-
+	switch v.Kind {
+	case KindExpr:
+		// Try to evaluate the expression
 		result, err := ctx.evaluateValue(v)
 		if err != nil {
 			ctx.logger.TraceContext(
 				ctx.get(),
-				"resolveForEnv expr failed",
-				slog.String("source", v.ExprSource()),
+				"resolve expression for environment",
+				slog.String("source", v.Source),
 				slog.String("error", err.Error()),
 			)
 
@@ -751,132 +518,68 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 
 		return result
 
-	case TypeTuple:
-		if v.Tuple == nil {
+	case KindBlock:
+		// Resolve block to map
+		result, err := ctx.evaluateBlock(v)
+		if err != nil {
+			ctx.logger.TraceContext(
+				ctx.get(),
+				"resolve block for environment",
+				slog.String("error", err.Error()),
+			)
+
 			return nil
-		}
-
-		// Check if all elements are namespaces
-		allNamespaces := true
-
-		for _, val := range v.Tuple.Values {
-			if val.Type != TypeNamespace {
-				allNamespaces = false
-
-				break
-			}
-		}
-
-		if allNamespaces && len(v.Tuple.Values) > 0 {
-			result := make(map[string]any)
-
-			for _, val := range v.Tuple.Values {
-				if val.Namespace != nil {
-					name := val.Namespace.Identifier.LiteralString()
-					result[name] = ctx.resolveForEnv(val.Namespace.Value)
-				}
-			}
-
-			return result
-		}
-
-		result := make([]any, 0, len(v.Tuple.Values))
-
-		for _, val := range v.Tuple.Values {
-			result = append(result, ctx.resolveForEnv(val))
 		}
 
 		return result
-
-	case TypeNamespace:
-		if v.Namespace == nil {
-			return nil
-		}
-
-		return ctx.resolveForEnv(v.Namespace.Value)
 
 	default:
 		return nil
 	}
 }
 
-// parseArgToValue converts a command-line argument string to a *Value.
+// parseArgToAny converts a command-line argument string to a Go value.
 // It uses smart inference to avoid requiring quoted strings:
-//   - Booleans (true/false) → TypeBoolean
-//   - Numbers (integers, floats) → TypeNumber
-//   - Tuples ({ ... }) → TypeTuple
-//   - Namespaces (contains :) → TypeNamespace
-//   - Expressions ({{ ... }}) → TypeExpr
-//   - Quoted strings ("..." or '...') → TypeString
-//   - Bare words matching a namespace → TypeIdentifier
-//   - Otherwise → TypeString (treated as unquoted string)
-func (ast *AST) parseArgToValue(ctx context.Context, arg string) *Value {
+//   - Booleans (true/false) → bool
+//   - Numbers (integers, floats) → int64/float64
+//   - Otherwise → string (treated as unquoted string)
+func parseArgToAny(arg string) any {
 	arg = strings.TrimSpace(arg)
 
 	// Empty string
 	if arg == "" {
-		return NewString("")
+		return ""
 	}
 
 	// Check for boolean literals
-	if arg == "true" || arg == "false" {
-		return NewBool(arg == "true")
+	if arg == "true" {
+		return true
 	}
 
-	// Check for tuple (starts with {, but not {{)
-	if strings.HasPrefix(arg, "{") && !strings.HasPrefix(arg, "{{") {
-		if val, err := ParseValue(ctx, arg); err == nil {
-			return val
-		}
-		// If parse fails, treat as string
-		return NewString(arg)
+	if arg == "false" {
+		return false
 	}
 
-	// Check for expression (starts with {{)
-	if strings.HasPrefix(arg, "{{") {
-		if val, err := ParseValue(ctx, arg); err == nil {
-			return val
-		}
+	// Check for number (try parsing as int or float)
+	if i, err := strconv.ParseInt(arg, 0, 64); err == nil {
+		return i
+	}
 
-		return NewString(arg)
+	if f, err := strconv.ParseFloat(arg, 64); err == nil {
+		return f
 	}
 
 	// Check for quoted string
 	if (strings.HasPrefix(arg, `"`) && strings.HasSuffix(arg, `"`)) ||
 		(strings.HasPrefix(arg, "'") && strings.HasSuffix(arg, "'")) ||
 		(strings.HasPrefix(arg, "`") && strings.HasSuffix(arg, "`")) {
-		if val, err := ParseValue(ctx, arg); err == nil {
-			return val
+		if unquoted, err := strconv.Unquote(arg); err == nil {
+			return unquoted
 		}
-
-		return NewString(arg)
 	}
 
-	// Check for namespace (contains : but not as first char)
-	if idx := strings.Index(arg, ":"); idx > 0 {
-		if val, err := ParseValue(ctx, arg); err == nil {
-			return val
-		}
-		// If parse fails, treat as string
-		return NewString(arg)
-	}
-
-	// Check for number (try parsing as int or float)
-	if _, err := strconv.ParseInt(arg, 0, 64); err == nil {
-		return NewNumber(arg)
-	}
-
-	if _, err := strconv.ParseFloat(arg, 64); err == nil {
-		return NewNumber(arg)
-	}
-
-	// Check if this matches an existing namespace name (identifier reference)
-	if _, found := ast.GetNamespace(arg); found {
-		return NewIdentifier(arg)
-	}
-
-	// Default: treat as a plain string (no quotes needed from user)
-	return NewString(arg)
+	// Default: treat as a plain string
+	return arg
 }
 
 // FormatResult formats an evaluation result for output.
@@ -885,7 +588,7 @@ func FormatResult(result any) string {
 	return formatResultValue(result)
 }
 
-// formatResultValue recursively formats a Go value as aenv syntax.
+// formatResultValue recursively formats a Go value as expr-lang syntax.
 func formatResultValue(v any) string {
 	switch val := v.(type) {
 	case nil:
@@ -918,24 +621,6 @@ func formatResultValue(v any) string {
 	}
 }
 
-// needsQuoting returns true if a string needs to be quoted.
-func needsQuoting(s string) bool {
-	if s == "" {
-		return true
-	}
-
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
-			r == '"' || r == '\'' || r == '\\' ||
-			r == '{' || r == '}' || r == ':' || r == ',' ||
-			r == '[' || r == ']' {
-			return true
-		}
-	}
-
-	return false
-}
-
 // formatSlice formats a slice as expr-lang array syntax.
 func formatSlice(vals []any) string {
 	if len(vals) == 0 {
@@ -963,4 +648,121 @@ func formatMap(m map[string]any) string {
 	}
 
 	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+// sortedKeys returns a sorted list of keys from a map for deterministic
+// logging.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	return keys
+}
+
+// formatNamespaceSignature formats a namespace signature with parameter names.
+// Examples: "foo()", "bar(x, y)", "baz(a, ...rest)".
+func formatNamespaceSignature(ns *Namespace) string {
+	if len(ns.Params) == 0 {
+		return ns.Name + "()"
+	}
+
+	params := make([]string, len(ns.Params))
+	for i, p := range ns.Params {
+		if p.Variadic {
+			params[i] = "..." + p.Name
+		} else {
+			params[i] = p.Name
+		}
+	}
+
+	return ns.Name + "(" + strings.Join(params, ", ") + ")"
+}
+
+// enhanceFunctionError checks if an error is related to a function call and
+// adds signature information if available.
+func enhanceFunctionError(err error, source string, ast *AST) *Error {
+	// First check if the error chain contains ErrArgumentCount, which already
+	// has signature information attached. If so, wrap it with ErrExprEvaluate
+	// while preserving the attributes.
+	var argCountErr *Error
+	if errors.As(err, &argCountErr) && argCountErr != nil {
+		// Check if this is specifically an ErrArgumentCount by comparing messages
+		if argCountErr.msg == ErrArgumentCount.msg {
+			// Preserve all attributes from the argument count error
+			return ErrExprEvaluate.Wrap(err).
+				With(argCountErr.attrs...)
+		}
+	}
+
+	errMsg := err.Error()
+
+	// Try to extract function name from common error patterns
+	var funcName string
+
+	// Pattern: "cannot call ... (type ...)"
+	if idx := strings.Index(errMsg, "cannot call"); idx >= 0 {
+		// Extract identifier after "cannot call"
+		after := errMsg[idx+len("cannot call"):]
+		if fields := strings.Fields(after); len(fields) > 0 {
+			funcName = strings.Trim(fields[0], "'\"()")
+		}
+	}
+
+	// Pattern: "unknown name ... ()"
+	if funcName == "" {
+		if idx := strings.Index(errMsg, "unknown name"); idx >= 0 {
+			after := errMsg[idx+len("unknown name"):]
+			if fields := strings.Fields(after); len(fields) > 0 {
+				funcName = strings.Trim(fields[0], "'\"()")
+			}
+		}
+	}
+
+	// Pattern: "invalid number of arguments ... (expected ...)"
+	// or "not enough arguments ... (expected ...)"
+	if funcName == "" {
+		for _, pattern := range []string{"arguments to", "arguments for"} {
+			if idx := strings.Index(errMsg, pattern); idx >= 0 {
+				after := errMsg[idx+len(pattern):]
+				if fields := strings.Fields(after); len(fields) > 0 {
+					funcName = strings.Trim(fields[0], "'\"()")
+				}
+
+				break
+			}
+		}
+	}
+
+	// If we found a function name, try to look it up
+	if funcName != "" {
+		if ns, ok := ast.GetNamespace(funcName); ok && len(ns.Params) > 0 {
+			sig := formatNamespaceSignature(ns)
+
+			return ErrExprEvaluate.Wrap(err).
+				With(
+					slog.String("function", funcName),
+					slog.String("signature", sig),
+				)
+		}
+	}
+
+	// No function found, return basic error
+	return ErrExprEvaluate.Wrap(err)
+}
+
+// isFunction checks if a value is a function type.
+func isFunction(v any) bool {
+	if v == nil {
+		return false
+	}
+
+	// Check for function types that would be returned by expr-lang
+	switch v.(type) {
+	case func(...any) (any, error):
+		return true
+	default:
+		return false
+	}
 }

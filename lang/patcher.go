@@ -8,23 +8,70 @@ import (
 	"github.com/ardnew/aenv/log"
 )
 
-// hyphenPatcher is an ast.Visitor that reconstructs hyphenated identifiers
-// from BinaryNode("-") subtraction chains created by expr-lang's parser.
+// namespacePatcher patches identifier nodes that match non-parameterized
+// namespace names with constant values.
+type namespacePatcher struct {
+	resolved map[string]any // name → resolved Go value
+	logger   log.Logger
+}
+
+// Visit implements ast.Visitor for namespacePatcher.
+func (p *namespacePatcher) Visit(node *ast.Node) {
+	ident, ok := (*node).(*ast.IdentifierNode)
+	if !ok {
+		return
+	}
+
+	val, exists := p.resolved[ident.Value]
+	if !exists {
+		return
+	}
+
+	// Patch with constant node
+	constNode := toConstantNode(val)
+	if constNode != nil {
+		ast.Patch(node, constNode)
+		p.logger.Trace("patch namespace",
+			slog.String("name", ident.Value),
+			slog.String("type", resultTypeName(val)))
+	}
+}
+
+// toConstantNode converts a Go value to an expr-lang constant node.
+func toConstantNode(val any) ast.Node {
+	switch v := val.(type) {
+	case nil:
+		return &ast.NilNode{}
+	case bool:
+		return &ast.BoolNode{Value: v}
+	case int:
+		return &ast.IntegerNode{Value: v}
+	case int64:
+		return &ast.IntegerNode{Value: int(v)}
+	case float64:
+		return &ast.FloatNode{Value: v}
+	case string:
+		return &ast.StringNode{Value: v}
+	default:
+		// For complex types (maps, slices, structs), use ConstantNode
+		return &ast.ConstantNode{Value: val}
+	}
+}
+
+// hyphenPatcher reconstructs hyphenated identifiers from BinaryNode("-")
+// subtraction chains created by expr-lang's parser.
 //
 // The aenv DSL allows hyphens in identifiers (e.g., "log-pretty"), but
 // expr-lang parses them as subtraction. This visitor detects subtraction
-// chains and, when the combined name exists in the environment or AST
-// namespace tree, patches the node to a single identifier or member access.
-//
-// The visitor runs before expr-lang's type checker via [expr.Patch].
+// chains and, when the combined name exists in the environment or namespace
+// tree, patches the node to a single identifier or member access.
 type hyphenPatcher struct {
 	namespaces []*Namespace   // AST namespaces for resolving member paths
 	env        map[string]any // Flat environment for checking top-level names
-	logger     log.Logger     // structured logger for trace-level debugging
+	logger     log.Logger
 }
 
-// Visit implements [ast.Visitor]. It is called in post-order by [ast.Walk],
-// so children are visited before their parents.
+// Visit implements ast.Visitor for hyphenPatcher.
 func (p *hyphenPatcher) Visit(node *ast.Node) {
 	binNode, ok := (*node).(*ast.BinaryNode)
 	if !ok || binNode.Operator != "-" {
@@ -81,16 +128,13 @@ func (p *hyphenPatcher) patchMember(
 		Method:   false,
 	})
 
-	p.logger.Trace(
-		"patch hyphenated",
+	p.logger.Trace("patch hyphenated",
 		slog.String("combined_name", combined),
-		slog.String("patch_type", "member"),
-	)
+		slog.String("patch_type", "member"))
 }
 
 // patchChain handles nested BinaryNode("-") chains where the inner node
 // was not patched (e.g., because only the full chain matches a name).
-// It recursively extracts the complete hyphenated name and validates it.
 func (p *hyphenPatcher) patchChain(
 	node *ast.Node,
 	left *ast.BinaryNode,
@@ -107,11 +151,9 @@ func (p *hyphenPatcher) patchChain(
 		// Top-level identifier chain: e.g., log-pretty-print
 		if p.hasTopLevel(combined) {
 			ast.Patch(node, &ast.IdentifierNode{Value: combined})
-			p.logger.Trace(
-				"patch hyphenated",
+			p.logger.Trace("patch hyphenated",
 				slog.String("combined_name", combined),
-				slog.String("patch_type", "chain"),
-			)
+				slog.String("patch_type", "chain"))
 		}
 
 		return
@@ -130,11 +172,9 @@ func (p *hyphenPatcher) patchChain(
 			Optional: false,
 			Method:   false,
 		})
-		p.logger.Trace(
-			"patch hyphenated",
+		p.logger.Trace("patch hyphenated",
 			slog.String("combined_name", combined),
-			slog.String("patch_type", "chain"),
-		)
+			slog.String("patch_type", "chain"))
 	}
 }
 
@@ -148,19 +188,14 @@ func (p *hyphenPatcher) patchTopLevel(
 	combined := left.Value + "-" + right.Value
 	if p.hasTopLevel(combined) {
 		ast.Patch(node, &ast.IdentifierNode{Value: combined})
-		p.logger.Trace(
-			"patch hyphenated",
+		p.logger.Trace("patch hyphenated",
 			slog.String("combined_name", combined),
-			slog.String("patch_type", "top-level"),
-		)
+			slog.String("patch_type", "top-level"))
 	}
 }
 
 // extractHyphenChain recursively walks unpatched BinaryNode("-") chains
 // to extract the base node and accumulated hyphenated property string.
-//
-// Returns (nil, combinedName, true) for top-level chains (ident-ident-...),
-// or (baseNode, combinedProp, true) for member access chains.
 func extractHyphenChain(
 	bin *ast.BinaryNode,
 ) (base ast.Node, property string, ok bool) {
@@ -204,8 +239,6 @@ func extractHyphenChain(
 }
 
 // extractMemberPath walks a MemberNode chain to produce path segments.
-// For MemberNode(MemberNode(IdentNode("a"), "b"), "c") it returns
-// ["a", "b", "c"].
 func extractMemberPath(node ast.Node) ([]string, bool) {
 	switch n := node.(type) {
 	case *ast.IdentifierNode:
@@ -229,8 +262,7 @@ func extractMemberPath(node ast.Node) ([]string, bool) {
 	}
 }
 
-// hasTopLevel checks whether the combined name exists as a key in the
-// flat environment map.
+// hasTopLevel checks whether the combined name exists in the environment.
 func (p *hyphenPatcher) hasTopLevel(name string) bool {
 	_, ok := p.env[name]
 
@@ -248,8 +280,7 @@ func (p *hyphenPatcher) hasChild(basePath []string, childName string) bool {
 	return findChildValue(val, childName) != nil
 }
 
-// resolvePath walks the namespace tree to find the Value at the given
-// dot-separated path.
+// resolvePath walks the namespace tree to find the Value at the given path.
 func (p *hyphenPatcher) resolvePath(segments []string) *Value {
 	if len(segments) == 0 {
 		return nil
@@ -270,7 +301,7 @@ func (p *hyphenPatcher) resolvePath(segments []string) *Value {
 // resolveBase finds a top-level namespace by name.
 func (p *hyphenPatcher) resolveBase(name string) *Value {
 	for _, ns := range p.namespaces {
-		if ns.Identifier.LiteralString() == name {
+		if ns.Name == name {
 			return ns.Value
 		}
 	}
@@ -278,19 +309,43 @@ func (p *hyphenPatcher) resolveBase(name string) *Value {
 	return nil
 }
 
-// findChildValue looks up a child namespace by name within a tuple value.
+// findChildValue looks up a child namespace by name within a block value.
 func findChildValue(v *Value, name string) *Value {
-	if v == nil || v.Type != TypeTuple || v.Tuple == nil {
+	if v == nil || v.Kind != KindBlock {
 		return nil
 	}
 
-	for _, child := range v.Tuple.Values {
-		if child.Type == TypeNamespace && child.Namespace != nil {
-			if child.Namespace.Identifier.LiteralString() == name {
-				return child.Namespace.Value
-			}
+	for _, child := range v.Entries {
+		if child.Name == name {
+			return child.Value
 		}
 	}
 
 	return nil
+}
+
+// resultTypeName returns a string representation of a value's type.
+func resultTypeName(v any) string {
+	if v == nil {
+		return "nil"
+	}
+
+	switch v.(type) {
+	case bool:
+		return "bool"
+	case int, int8, int16, int32, int64:
+		return "int"
+	case uint, uint8, uint16, uint32, uint64:
+		return "uint"
+	case float32, float64:
+		return "float"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "map"
+	default:
+		return "unknown"
+	}
 }

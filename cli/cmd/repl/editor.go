@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/ardnew/aenv/lang"
-	"github.com/ardnew/aenv/lang/lexer"
 	"github.com/ardnew/aenv/log"
 )
 
@@ -92,16 +91,15 @@ func (c *editASTCommand) Run() error {
 			return nil
 		}
 
-		// Read all content from the buffered reader and parse via the lexer.
+		// Read all content from the buffered reader and parse.
 		data, err := io.ReadAll(br)
 		if err != nil {
 			return err
 		}
 
-		newAST, parseErr := lang.Parse(
+		newAST, parseErr := lang.ParseString(
 			ctx,
-			lexer.New([]rune(string(data))),
-			lang.WithCompileExprs(true),
+			string(data),
 			lang.WithLogger(c.logger),
 		)
 		c.logger.TraceContext(

@@ -113,18 +113,22 @@ func parentPath(input string, wordStart int) string {
 
 // childCandidates returns the names that are valid completions for the given
 // parent path. For an empty parent, returns all top-level namespace names plus
-// the "env" builtin. For a non-empty parent, resolves the namespace and returns
-// the names of direct children (tuple elements that are namespaces).
+// built-in environment names. For a non-empty parent, resolves the namespace or
+// built-in and returns the names of direct children.
 func childCandidates(ast *lang.AST, parent string) []string {
 	if parent == "" {
-		// Top-level: all namespace names + env builtin.
+		// Top-level: all namespace names + built-in environment.
 		var names []string
 
 		for ns := range ast.All() {
-			names = append(names, ns.Identifier.LiteralString())
+			names = append(names, ns.Name)
 		}
 
-		names = append(names, "env")
+		// Add all built-in environment keys
+		names = append(names, lang.BuiltinEnvKeys()...)
+
+		// Add expr-lang builtin functions
+		names = append(names, ExprLangBuiltinNames()...)
 
 		return names
 	}
@@ -132,56 +136,55 @@ func childCandidates(ast *lang.AST, parent string) []string {
 	// Resolve the parent path segment by segment.
 	segments := strings.Split(parent, ".")
 
-	// Find the top-level namespace.
+	// First, try to resolve as a namespace in the AST.
 	ns, ok := ast.GetNamespace(segments[0])
-	if !ok {
-		return nil
-	}
+	if ok {
+		// Walk into nested namespaces for remaining segments.
+		val := ns.Value
 
-	// Walk into nested namespaces for remaining segments.
-	val := ns.Value
+		for _, seg := range segments[1:] {
+			val = findChild(val, seg)
+			if val == nil {
+				break
+			}
+		}
 
-	for _, seg := range segments[1:] {
-		val = findChild(val, seg)
-		if val == nil {
-			return nil
+		if val != nil {
+			// Return names of children from the AST.
+			return childNames(val)
 		}
 	}
 
-	// Return names of children.
-	return childNames(val)
+	// If not found in AST, try the built-in environment.
+	return lang.BuiltinEnvLookup(parent)
 }
 
-// findChild looks up a child namespace by name within a tuple value.
+// findChild looks up a child namespace by name within a block value.
 func findChild(v *lang.Value, name string) *lang.Value {
-	if v == nil || v.Type != lang.TypeTuple || v.Tuple == nil {
+	if v == nil || v.Kind != lang.KindBlock {
 		return nil
 	}
 
-	for _, child := range v.Tuple.Values {
-		if child.Type == lang.TypeNamespace && child.Namespace != nil {
-			if child.Namespace.Identifier.LiteralString() == name {
-				return child.Namespace.Value
-			}
+	for _, child := range v.Entries {
+		if child.Name == name {
+			return child.Value
 		}
 	}
 
 	return nil
 }
 
-// childNames extracts the identifier names of all namespace-typed children
-// within a tuple value.
+// childNames extracts the identifier names of all namespace children
+// within a block value.
 func childNames(v *lang.Value) []string {
-	if v == nil || v.Type != lang.TypeTuple || v.Tuple == nil {
+	if v == nil || v.Kind != lang.KindBlock {
 		return nil
 	}
 
 	var names []string
 
-	for _, child := range v.Tuple.Values {
-		if child.Type == lang.TypeNamespace && child.Namespace != nil {
-			names = append(names, child.Namespace.Identifier.LiteralString())
-		}
+	for _, child := range v.Entries {
+		names = append(names, child.Name)
 	}
 
 	return names
@@ -300,7 +303,7 @@ func renderCandidateBar(
 }
 
 // renderCandidate renders a single candidate with matched characters
-// highlighted.
+// highlighted. Functions are displayed with a "()" suffix.
 func renderCandidate(match fuzzy.Match, selected bool) string {
 	baseStyle := suggestionStyle
 	highlightStyle := lipgloss.NewStyle().
@@ -331,6 +334,11 @@ func renderCandidate(match fuzzy.Match, selected bool) string {
 		}
 	}
 
+	// Add "()" suffix for functions (not applied to actual completion)
+	if isFunction(match.Str) {
+		b.WriteString(baseStyle.Render("()"))
+	}
+
 	return b.String()
 }
 
@@ -339,13 +347,16 @@ func formatPreview(ns *lang.Namespace) string {
 	var sb strings.Builder
 
 	// Show parameters if any
-	if len(ns.Parameters) > 0 {
+	if len(ns.Params) > 0 {
 		var params []string
 
-		for _, p := range ns.Parameters {
-			if p.Token != nil {
-				params = append(params, p.Token.LiteralString())
+		for _, p := range ns.Params {
+			paramName := p.Name
+			if p.Variadic {
+				paramName = "..." + paramName
 			}
+
+			params = append(params, paramName)
 		}
 
 		sb.WriteString("(" + strings.Join(params, ", ") + ") -> ")
@@ -365,49 +376,39 @@ func formatValuePreview(v *lang.Value) string {
 		return "<nil>"
 	}
 
-	switch v.Type {
-	case lang.TypeBoolean, lang.TypeNumber, lang.TypeString:
-		if v.Token != nil {
-			s := v.Token.LiteralString()
-			if len(s) > 40 {
-				return s[:37] + "..."
-			}
-
-			return s
-		}
-
-		return ""
-
-	case lang.TypeIdentifier:
-		if v.Token != nil {
-			return "-> " + v.Token.LiteralString()
-		}
-
-		return ""
-
-	case lang.TypeExpr:
-		src := v.ExprSource()
+	switch v.Kind {
+	case lang.KindExpr:
+		src := v.Source
 		if len(src) > 40 {
-			return "{{ " + src[:37] + "... }}"
+			return src[:37] + "..."
 		}
 
-		return "{{ " + src + " }}"
+		return src
 
-	case lang.TypeTuple:
-		if v.Tuple != nil {
-			return fmt.Sprintf("{ %d items }", len(v.Tuple.Values))
-		}
-
-		return "{}"
-
-	case lang.TypeNamespace:
-		if v.Namespace != nil {
-			return "<nested: " + v.Namespace.Identifier.LiteralString() + ">"
-		}
-
-		return "<nested>"
+	case lang.KindBlock:
+		return fmt.Sprintf("{ %d items }", len(v.Entries))
 
 	default:
 		return "<unknown>"
 	}
+}
+
+// isFunction checks if a name refers to a function that should display with
+// "()".
+// This includes expr-lang builtins and builtin environment functions that are
+// callable (not simple values or namespaces).
+func isFunction(name string) bool {
+	// Check expr-lang builtins
+	if _, ok := exprLangBuiltins[name]; ok {
+		return true
+	}
+
+	// Check builtin environment functions
+	if name == "cwd" {
+		return true // cwd is a function
+	}
+
+	// Check nested builtins (e.g., "file.exists" won't appear as top-level)
+	// For top-level display, we only check simple names
+	return false
 }

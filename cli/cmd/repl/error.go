@@ -4,7 +4,7 @@ import "errors"
 
 // Sentinel errors.
 var (
-	ErrNoSource     = errors.New("no source files provided")
+	ErrNoSource     = errors.New("require source files")
 	ErrOutOfBounds  = errors.New("index out of range")
-	ErrEditDeclined = errors.New("user declined to re-edit")
+	ErrEditDeclined = errors.New("decline edit")
 )

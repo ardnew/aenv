@@ -7,23 +7,27 @@ import (
 )
 
 // MarshalJSON implements json.Marshaler for AST.
-func (ast *AST) MarshalJSON() ([]byte, error) {
-	return json.Marshal(ast.ToMap())
+func (a *AST) MarshalJSON() ([]byte, error) {
+	return json.Marshal(a.ToMap())
 }
 
 // ToMap converts the AST to a native Go map structure.
-func (ast *AST) ToMap() map[string]any {
+func (a *AST) ToMap() map[string]any {
 	// Convert to a map where each namespace name is a key
 	result := make(map[string]any)
 
-	for _, ns := range ast.Namespaces {
-		name := ns.Identifier.LiteralString()
+	for _, ns := range a.Namespaces {
+		name := ns.Name
 
 		// If there are parameters, add them alongside the value
-		if len(ns.Parameters) > 0 {
-			params := make([]any, len(ns.Parameters))
-			for i, param := range ns.Parameters {
-				params[i] = param.ToNative()
+		if len(ns.Params) > 0 {
+			params := make([]string, len(ns.Params))
+			for i, param := range ns.Params {
+				if param.Variadic {
+					params[i] = "..." + param.Name
+				} else {
+					params[i] = param.Name
+				}
 			}
 
 			value := ns.Value.ToNative()
@@ -31,7 +35,9 @@ func (ast *AST) ToMap() map[string]any {
 			// If the value is a map, flatten it into the same object as (parameters)
 			if valueMap, ok := value.(map[string]any); ok {
 				defData := make(map[string]any)
+
 				defData["(parameters)"] = params
+
 				// Merge value map keys into defData
 				maps.Copy(defData, valueMap)
 
@@ -39,8 +45,10 @@ func (ast *AST) ToMap() map[string]any {
 			} else {
 				// Value is not a map (e.g., array or literal), so keep it under (value)
 				defData := make(map[string]any)
+
 				defData["(parameters)"] = params
 				defData["(value)"] = value
+
 				result[name] = defData
 			}
 		} else {
@@ -54,150 +62,89 @@ func (ast *AST) ToMap() map[string]any {
 
 // ToNative converts a Value to its native Go type.
 func (v *Value) ToNative() any {
-	switch v.Type {
-	case TypeIdentifier:
-		return v.Token.LiteralString()
+	if v == nil {
+		return nil
+	}
 
-	case TypeNumber:
-		// Parse the number to determine if it's an int or float
-		s := v.Token.LiteralString()
-		// Try parsing as int first
-		if i, err := strconv.ParseInt(s, 0, 64); err == nil {
-			return i
-		}
-		// Fall back to float
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			return f
-		}
-		// If both fail, return the string
-		return s
-
-	case TypeString:
-		// Remove quotes from string literals
-		s := v.Token.LiteralString()
-		a := []rune(s)
-		isEnclosed := func(r ...rune) bool {
-			var lhs, rhs rune
-
-			switch len(r) {
-			case 0:
-				return true
-			case 1:
-				lhs, rhs = r[0], r[0]
-			default:
-				lhs, rhs = r[0], r[1]
-			}
-
-			if len(a) < 2 {
-				return false
-			}
-
-			return a[0] == lhs && a[len(a)-1] == rhs
+	switch v.Kind {
+	case KindExpr:
+		// Try to parse as literal types first
+		// Trim whitespace from expression source
+		s := v.Source
+		// Remove leading and trailing whitespace but preserve string content
+		for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r') {
+			s = s[1:]
 		}
 
-		if isEnclosed('"') || isEnclosed('`') || isEnclosed('\'') {
-			// Unquote the string, handling escape sequencesgo
-			if unquoted, err := strconv.Unquote(s); err == nil {
-				return unquoted
-			}
+		for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t' || s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+			s = s[:len(s)-1]
 		}
 
-		return s
-
-	case TypeExpr:
-		s := v.ExprSource()
-		if len(s) > 0 {
-			s = " " + s + " "
+		// Check for boolean
+		if s == "true" {
+			return true
 		}
 
-		return "{{" + s + "}}"
-
-	case TypeBoolean:
-		s := v.Token.LiteralString()
-
-		result, err := strconv.ParseBool(s)
-		if err != nil {
+		if s == "false" {
 			return false
 		}
 
-		return result
-
-	case TypeTuple:
-		if v.Tuple == nil {
-			return nil
+		// Try parsing as number
+		if i, err := strconv.ParseInt(s, 0, 64); err == nil {
+			return i
 		}
 
-		// Check if all elements are Namespaces - if so, return as an object
-		allNamespaces := true
-
-		for _, val := range v.Tuple.Values {
-			if val.Type != TypeNamespace {
-				allNamespaces = false
-
-				break
-			}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f
 		}
 
-		if allNamespaces && len(v.Tuple.Values) > 0 {
-			// Return as object with namespace names as keys
-			result := make(map[string]any)
-
-			for _, val := range v.Tuple.Values {
-				if val.Namespace != nil {
-					name := val.Namespace.Identifier.LiteralString()
-					// If namespace has parameters, wrap with (parameters)
-					if len(val.Namespace.Parameters) > 0 {
-						defData := make(map[string]any)
-
-						params := make([]any, len(val.Namespace.Parameters))
-						for i, param := range val.Namespace.Parameters {
-							params[i] = param.ToNative()
-						}
-
-						defData["(parameters)"] = params
-						defData["(value)"] = val.Namespace.Value.ToNative()
-						result[name] = defData
-					} else {
-						// No parameters: just use the value
-						result[name] = val.Namespace.Value.ToNative()
-					}
+		// Check for quoted string
+		if len(s) >= 2 {
+			first, last := s[0], s[len(s)-1]
+			if (first == '"' && last == '"') ||
+				(first == '\'' && last == '\'') ||
+				(first == '`' && last == '`') {
+				if unquoted, err := strconv.Unquote(s); err == nil {
+					return unquoted
 				}
 			}
-
-			return result
 		}
 
-		// Mixed tuple or all literals: return as array
-		result := make([]any, 0, len(v.Tuple.Values))
-		for _, val := range v.Tuple.Values {
-			result = append(result, val.ToNative())
+		// Return as-is (likely an identifier or expression)
+		return s
+
+	case KindBlock:
+		// Block: convert to map
+		if v.Entries == nil || len(v.Entries) == 0 {
+			return make(map[string]any)
 		}
 
-		return result
-
-	case TypeNamespace:
-		if v.Namespace == nil {
-			return nil
-		}
-		// Represent namespace as a simple object {name: value}
 		result := make(map[string]any)
-		name := v.Namespace.Identifier.LiteralString()
 
-		// If namespace has parameters, wrap with (parameters)
-		if len(v.Namespace.Parameters) > 0 {
-			defData := make(map[string]any)
+		for _, ns := range v.Entries {
+			name := ns.Name
 
-			params := make([]any, len(v.Namespace.Parameters))
-			for i, param := range v.Namespace.Parameters {
-				params[i] = param.ToNative()
+			// If namespace has parameters, wrap with (parameters)
+			if len(ns.Params) > 0 {
+				defData := make(map[string]any)
+
+				params := make([]string, len(ns.Params))
+				for i, param := range ns.Params {
+					if param.Variadic {
+						params[i] = "..." + param.Name
+					} else {
+						params[i] = param.Name
+					}
+				}
+
+				defData["(parameters)"] = params
+				defData["(value)"] = ns.Value.ToNative()
+
+				result[name] = defData
+			} else {
+				// No parameters: just use the value
+				result[name] = ns.Value.ToNative()
 			}
-
-			defData["(parameters)"] = params
-			defData["(value)"] = v.Namespace.Value.ToNative()
-			result[name] = defData
-		} else {
-			// No parameters: simple key-value
-			result[name] = v.Namespace.Value.ToNative()
 		}
 
 		return result
