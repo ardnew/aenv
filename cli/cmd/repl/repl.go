@@ -238,6 +238,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editASTMsg:
 		m.ast = msg.ast
+		// Clear program cache since AST changed
+		lang.ClearProgramCache()
 		m.logger.TraceContext(
 			m.ctxFunc(),
 			"repl edit complete",

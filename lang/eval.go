@@ -8,12 +8,76 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 
 	"github.com/ardnew/aenv/log"
 )
+
+// runtimeEnvPool pools runtime environment maps to reduce allocations.
+//
+//nolint:gochecknoglobals
+var runtimeEnvPool = sync.Pool{
+	New: func() any {
+		// Pre-allocate with reasonable capacity
+		// Typical env has ~20 builtins + namespace count
+		return make(map[string]any, 32)
+	},
+}
+
+// programCache caches compiled expr programs to avoid recompilation.
+// Key is the source string; value is the compiled program.
+//
+//nolint:gochecknoglobals
+var (
+	programCacheMu sync.RWMutex
+	programCache   = make(map[string]*vm.Program)
+)
+
+// compileExpr compiles an expression, using cache when possible.
+func compileExpr(source string, env map[string]any, patcher expr.Option) (*vm.Program, error) {
+	// Check cache first (read lock)
+	programCacheMu.RLock()
+	if prog, ok := programCache[source]; ok {
+		programCacheMu.RUnlock()
+		return prog, nil
+	}
+	programCacheMu.RUnlock()
+
+	// Not in cache, compile it (write lock)
+	programCacheMu.Lock()
+	defer programCacheMu.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine may have added it)
+	if prog, ok := programCache[source]; ok {
+		return prog, nil
+	}
+
+	// Compile the expression
+	program, err := expr.Compile(
+		source,
+		expr.Env(env),
+		patcher,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add to cache (simple unbounded cache for now)
+	programCache[source] = program
+
+	return program, nil
+}
+
+// ClearProgramCache clears the compiled program cache.
+// This should be called when AST is modified (e.g., after `:edit` in REPL).
+func ClearProgramCache() {
+	programCacheMu.Lock()
+	defer programCacheMu.Unlock()
+	programCache = make(map[string]*vm.Program)
+}
 
 // EvaluateNamespace evaluates a namespace with the given parameter bindings.
 // The args slice provides values for each parameter in order.
@@ -174,6 +238,7 @@ func (a *AST) EvaluateExpr(
 
 	// Build runtime environment with actual resolved values
 	runtimeEnv := ectx.buildRuntimeEnv()
+	defer returnRuntimeEnv(runtimeEnv)
 
 	logger.TraceContext(
 		ctx,
@@ -188,11 +253,7 @@ func (a *AST) EvaluateExpr(
 		logger:     logger,
 	}
 
-	program, err := expr.Compile(
-		source,
-		expr.Env(runtimeEnv),
-		expr.Patch(patcher),
-	)
+	program, err := compileExpr(source, runtimeEnv, expr.Patch(patcher))
 	if err != nil {
 		return nil, ErrExprCompile.Wrap(err).
 			With(slog.String("source", source))
@@ -265,6 +326,7 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 
 	// Build runtime environment with resolved parameter values
 	env := ctx.buildRuntimeEnv()
+	defer returnRuntimeEnv(env)
 
 	ctx.logger.TraceContext(
 		ctx.get(),
@@ -280,11 +342,7 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 		logger:     ctx.logger,
 	}
 
-	program, err := expr.Compile(
-		source,
-		expr.Env(env),
-		expr.Patch(patcher),
-	)
+	program, err := compileExpr(source, env, expr.Patch(patcher))
 	if err != nil {
 		return nil, ErrExprCompile.Wrap(err).
 			With(slog.String("source", source))
@@ -369,9 +427,19 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 }
 
 // buildRuntimeEnv constructs the environment for expr execution.
+// The returned map is from a pool and should be returned via returnRuntimeEnv().
 func (ctx *evalContext) buildRuntimeEnv() map[string]any {
-	// Start with built-in environment
-	env := makeEnvCache()
+	// Get pooled map
+	env := runtimeEnvPool.Get().(map[string]any)
+
+	// Clear any leftover entries (should be empty, but ensure it)
+	for k := range env {
+		delete(env, k)
+	}
+
+	// Start with built-in environment (copy into pooled map)
+	builtins := makeEnvCache()
+	maps.Copy(env, builtins)
 
 	// Add parameters first (they take precedence and shadow builtins)
 	maps.Copy(env, ctx.params)
@@ -411,6 +479,15 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 	)
 
 	return env
+}
+
+// returnRuntimeEnv returns a runtime environment map to the pool.
+func returnRuntimeEnv(env map[string]any) {
+	// Clear the map before returning to pool
+	for k := range env {
+		delete(env, k)
+	}
+	runtimeEnvPool.Put(env)
 }
 
 // makeNamespaceFunc creates a callable function for a parameterized namespace.
