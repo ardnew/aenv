@@ -1,6 +1,101 @@
 package repl
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/sahilm/fuzzy"
+)
+
+// makeMatches builds a fuzzy.Matches slice from a plain string slice with no
+// match highlights — sufficient for testing the candidate bar layout.
+func makeMatches(names []string) fuzzy.Matches {
+	m := make(fuzzy.Matches, len(names))
+	for i, n := range names {
+		m[i] = fuzzy.Match{Str: n, Index: i}
+	}
+
+	return m
+}
+
+// TestRenderCandidateBar_NoScroll verifies that when all candidates fit inside
+// the terminal width no scroll arrows are emitted.
+func TestRenderCandidateBar_NoScroll(t *testing.T) {
+	matches := makeMatches([]string{"alpha", "beta", "gamma"})
+	result := renderCandidateBar(matches, -1, false, 200)
+
+	if strings.Contains(result, "←") || strings.Contains(result, "→") {
+		t.Errorf("expected no scroll arrows, got: %q", result)
+	}
+
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if !strings.Contains(result, name) {
+			t.Errorf("expected %q in result, got: %q", name, result)
+		}
+	}
+}
+
+// TestRenderCandidateBar_RightArrow verifies that a right-scroll arrow is
+// shown when the candidate list overflows to the right with no selection.
+func TestRenderCandidateBar_RightArrow(t *testing.T) {
+	names := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
+	matches := makeMatches(names)
+
+	// Use a very narrow width so only a couple of candidates fit.
+	narrowWidth := lipgloss.Width("alpha  beta") + 2
+	result := renderCandidateBar(matches, -1, false, narrowWidth)
+
+	if !strings.Contains(result, "→") {
+		t.Errorf("expected right arrow, got: %q", result)
+	}
+
+	if strings.Contains(result, "←") {
+		t.Errorf("expected no left arrow at start of list, got: %q", result)
+	}
+}
+
+// TestRenderCandidateBar_SelectedAlwaysVisible verifies that when tab-cycling
+// the selected candidate is always present in the rendered output even when
+// the list is wider than the terminal.
+func TestRenderCandidateBar_SelectedAlwaysVisible(t *testing.T) {
+	names := []string{"aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg", "hhh"}
+	matches := makeMatches(names)
+
+	// Width that fits roughly 3 short names.
+	w := lipgloss.Width("aaa  bbb  ccc  ←   →") + 4
+
+	for suggIdx := range names {
+		result := renderCandidateBar(matches, suggIdx, true, w)
+
+		if !strings.Contains(result, names[suggIdx]) {
+			t.Errorf("suggIdx=%d: selected candidate %q not visible in %q",
+				suggIdx, names[suggIdx], result)
+		}
+	}
+}
+
+// TestRenderCandidateBar_LeftArrowWhenScrolled verifies that a left-scroll
+// arrow is shown when the window has moved past the first candidate.
+func TestRenderCandidateBar_LeftArrowWhenScrolled(t *testing.T) {
+	names := []string{"aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg", "hhh"}
+	matches := makeMatches(names)
+
+	// Width that fits roughly 3 short names.
+	w := lipgloss.Width("aaa  bbb  ccc  ←   →") + 4
+
+	// Selecting a later candidate should force the window to scroll,
+	// revealing the left arrow.
+	result := renderCandidateBar(matches, len(names)-1, true, w)
+
+	if !strings.Contains(result, "←") {
+		t.Errorf("expected left arrow when scrolled, got: %q", result)
+	}
+
+	if !strings.Contains(result, names[len(names)-1]) {
+		t.Errorf("expected last candidate to be visible, got: %q", result)
+	}
+}
 
 func TestWordBounds_ExprOperators(t *testing.T) {
 	tests := []struct {

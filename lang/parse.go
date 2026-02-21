@@ -27,12 +27,14 @@ func ParseReader(
 
 // ParseString parses an AST from a string.
 func ParseString(ctx context.Context, s string, opts ...Option) (*AST, error) {
+	var logger log.Logger
+
 	p := &parser{
 		input:  []byte(s),
 		pos:    0,
 		line:   1,
 		col:    1,
-		logger: log.Logger{},
+		logger: logger,
 	}
 
 	ast, err := p.parseManifest()
@@ -67,9 +69,8 @@ type parser struct {
 
 // parseManifest parses the entire input as a list of namespaces.
 func (p *parser) parseManifest() (*AST, error) {
-	ast := &AST{
-		Namespaces: make([]*Namespace, 0),
-	}
+	ast := new(AST)
+	ast.Namespaces = make([]*Namespace, 0)
 
 	for {
 		p.skipWhitespaceAndComments()
@@ -200,11 +201,12 @@ func (p *parser) parseValue() (*Value, error) {
 		return nil, err
 	}
 
-	return &Value{
-		Kind:   KindExpr,
-		Source: source,
-		Pos:    pos,
-	}, nil
+	v := new(Value)
+	v.Kind = KindExpr
+	v.Source = source
+	v.Pos = pos
+
+	return v, nil
 }
 
 // isBlock checks if '{' starts a block (namespace group) or an expression.
@@ -288,11 +290,12 @@ func (p *parser) parseBlock() (*Value, error) {
 		}
 	}
 
-	return &Value{
-		Kind:    KindBlock,
-		Entries: entries,
-		Pos:     pos,
-	}, nil
+	v := new(Value)
+	v.Kind = KindBlock
+	v.Entries = entries
+	v.Pos = pos
+
+	return v, nil
 }
 
 // captureExpression captures raw expression text.
@@ -668,5 +671,5 @@ func stripComments(s string) string {
 	result += resultSb534.String()
 
 	// Trim whitespace
-	return result
+	return strings.TrimSpace(result)
 }

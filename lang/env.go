@@ -21,8 +21,6 @@ import (
 )
 
 // Private singleton cache.
-//
-//nolint:gochecknoglobals
 var (
 	envCacheOnce sync.Once
 	envCache     map[string]any
@@ -408,12 +406,4 @@ func buildProcessEnvMap(envList []string, keyVal ...string) map[string]string {
 	})
 
 	return processEnvCache
-}
-
-// envFunc returns the built-in env() function that provides
-// process environment access to expr programs.
-func envFunc(processEnv map[string]string) func(string) string {
-	return func(key string) string {
-		return processEnv[key]
-	}
 }

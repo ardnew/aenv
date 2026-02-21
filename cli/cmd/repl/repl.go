@@ -147,7 +147,7 @@ func Run(
 	)
 
 	if reader == nil {
-		return ErrNoSource
+		reader = strings.NewReader("")
 	}
 
 	ast, err := lang.ParseReader(
@@ -448,6 +448,18 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		// Reset history index when typing
 		m.historyIdx = m.history.Len()
 		m.input, cmd = m.input.Update(msg)
+
+		// ":" as the sole non-whitespace input in eval mode is a shortcut to
+		// switch to command mode. The colon itself is discarded — it is not
+		// echoed, not added to history, and does not appear as the initial
+		// text in command mode.
+		if m.mode == modeEval && strings.TrimSpace(m.input.Value()) == ":" {
+			m.input.SetValue("")
+			m.tabActive = false
+
+			return m.switchToMode(modeCtrl)
+		}
+
 		refreshMatches(&m, true)
 
 		return m, cmd
@@ -469,7 +481,11 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 func (m model) handleTab() (model, tea.Cmd) {
 	if len(m.matches) == 0 {
-		return m, nil
+		// When input is empty at the top level in eval mode, populate all
+		// candidates sorted by priority so the user can browse everything.
+		if !populateAllMatches(&m) {
+			return m, nil
+		}
 	}
 
 	// Single candidate: complete and confirm immediately.
@@ -502,7 +518,9 @@ func (m model) handleTab() (model, tea.Cmd) {
 
 func (m model) handleShiftTab() (model, tea.Cmd) {
 	if len(m.matches) == 0 {
-		return m, nil
+		if !populateAllMatches(&m) {
+			return m, nil
+		}
 	}
 
 	// Single candidate: complete and confirm immediately.
@@ -531,6 +549,40 @@ func (m model) handleShiftTab() (model, tea.Cmd) {
 	replaceCurrentWord(&m, m.matches[m.suggIdx].Str)
 
 	return m, nil
+}
+
+// populateAllMatches fills m.matches and m.candidates with all top-level
+// candidates sorted by priority. It is called when Tab/Shift-Tab is pressed
+// with no current matches (i.e. empty input at the top level in eval mode).
+// Returns true if matches were populated, false if the operation is a no-op
+// (wrong mode or no candidates available).
+func populateAllMatches(m *model) bool {
+	if m.mode != modeEval {
+		return false
+	}
+
+	cands := childCandidates(m.ast, "")
+	if len(cands) == 0 {
+		return false
+	}
+
+	all := make(fuzzy.Matches, len(cands))
+	for i, c := range cands {
+		all[i] = fuzzy.Match{Str: c, Index: i}
+	}
+
+	sortMatchesByPriority(all, m.ast)
+
+	m.candidates = cands
+	m.matches = all
+
+	// Reset word boundaries to reflect the current (likely empty) input so
+	// that replaceCurrentWord does not use stale offsets from a previous
+	// evaluation.
+	m.wordStart = 0
+	m.wordEnd = len(m.input.Value())
+
+	return true
 }
 
 // replaceCurrentWord replaces the current word boundaries in the input with
@@ -635,10 +687,18 @@ func (m model) executeInput() (model, tea.Cmd) {
 		slog.String("result_type", resultTypeName(result)),
 	)
 
-	return m, tea.Sequence(
-		echoCmd,
-		tea.Println(resultStyle.Render(lang.FormatResult(result))),
-	)
+	formatted := lang.FormatResult(result)
+
+	var printCmd tea.Cmd
+	if _, ok := result.(*lang.FuncRef); ok {
+		// Render function references with hint styling to distinguish them from
+		// evaluated values.
+		printCmd = tea.Println(hintStyle.Render(formatted))
+	} else {
+		printCmd = tea.Println(resultStyle.Render(formatted))
+	}
+
+	return m, tea.Sequence(echoCmd, printCmd)
 }
 
 func (m model) executeCommand(
@@ -669,15 +729,23 @@ func (m model) executeCommand(
 		return m, tea.Sequence(echoCmd, tea.Quit)
 
 	case "h", "help":
+		m, _ = m.switchToMode(modeEval)
+
 		return m, tea.Sequence(echoCmd, tea.Println(m.helpView()))
 
 	case "l", "list":
+		m, _ = m.switchToMode(modeEval)
+
 		return m, tea.Sequence(echoCmd, tea.Println(m.listNamespaces()))
 
 	case "c", "clear":
+		m, _ = m.switchToMode(modeEval)
+
 		return m, tea.ClearScreen
 
 	case "e", "edit":
+		m, _ = m.switchToMode(modeEval)
+
 		var editCmd tea.Cmd
 
 		m, editCmd = m.handleEdit(m.ctxFunc())
@@ -685,6 +753,7 @@ func (m model) executeCommand(
 		return m, tea.Sequence(echoCmd, editCmd)
 
 	default:
+		// Unknown command — stay in command mode so the user can retry.
 		return m, tea.Println(
 			errorStyle.Render("Unknown command: " + cmd + " (try 'help')"),
 		)

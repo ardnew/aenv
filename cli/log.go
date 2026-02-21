@@ -304,6 +304,9 @@ func (f *logConfig) scan(args []string) {
 	}
 }
 
+// verboseTrace is the verbosity level that enables trace-level logging.
+const verboseTrace = 2
+
 // applyVerbosity determines the effective log level based on verbosity flag.
 // Verbosity overrides any explicitly set log level:
 //
@@ -312,7 +315,7 @@ func (f *logConfig) scan(args []string) {
 //	(no -v flag)       : use configured Level
 func (f *logConfig) applyVerbosity() log.Level {
 	switch {
-	case f.Verbose >= 2:
+	case f.Verbose >= verboseTrace:
 		return log.LevelTrace
 	case f.Verbose == 1:
 		return log.LevelDebug

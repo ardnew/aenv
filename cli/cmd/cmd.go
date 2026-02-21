@@ -28,8 +28,9 @@ func kongContextFrom(ctx context.Context) *kong.Context {
 }
 
 type (
-	sourceFilesKey struct{}
-	sourceFiles    struct {
+	sourceFilesKey         struct{}
+	explicitSourceFilesKey struct{}
+	sourceFiles            struct {
 		read     []io.Reader
 		hasStdin bool
 	}
@@ -94,8 +95,30 @@ const stdinSource = "-"
 // inode pairs. All occurrences of "-" are replaced with a single stdin reader.
 // The stdin reader is placed last so it reads after all regular files.
 func WithSourceFiles(ctx context.Context, sources []string) context.Context {
+	return context.WithValue(ctx, sourceFilesKey{}, buildSourceFiles(sources))
+}
+
+// WithExplicitSourceFiles returns a new context.Context containing an
+// [io.Reader] for only the explicitly specified source files (excluding any
+// implicitly included files such as the config file).
+func WithExplicitSourceFiles(
+	ctx context.Context,
+	sources []string,
+) context.Context {
+	return context.WithValue(
+		ctx,
+		explicitSourceFilesKey{},
+		buildSourceFiles(sources),
+	)
+}
+
+// buildSourceFiles constructs a SourceFiles from the given source paths.
+// It deduplicates readers by resolving symlinks and comparing device/inode
+// pairs. All occurrences of "-" are replaced with a single stdin reader placed
+// last so it reads after all regular files.
+func buildSourceFiles(sources []string) SourceFiles {
 	if len(sources) == 0 {
-		return context.WithValue(ctx, sourceFilesKey{}, nil)
+		return nil
 	}
 
 	var srcs sourceFiles
@@ -128,10 +151,10 @@ func WithSourceFiles(ctx context.Context, sources []string) context.Context {
 
 	// If no files were successfully opened and no stdin, return nil
 	if len(srcs.read) == 0 && !srcs.hasStdin {
-		return context.WithValue(ctx, sourceFilesKey{}, nil)
+		return nil
 	}
 
-	return context.WithValue(ctx, sourceFilesKey{}, &srcs)
+	return &srcs
 }
 
 // openUniqueFile opens the file at path if it hasn't been seen before.
@@ -191,6 +214,14 @@ func makeFileKey(info os.FileInfo) (key fileKey, ok bool) {
 // Returns nil if no reader was stored.
 func sourceFilesFrom(ctx context.Context) SourceFiles {
 	r, _ := ctx.Value(sourceFilesKey{}).(SourceFiles)
+
+	return r
+}
+
+// explicitSourceFilesFrom retrieves the io.Reader stored in ctx by
+// WithExplicitSourceFiles. Returns nil if no reader was stored.
+func explicitSourceFilesFrom(ctx context.Context) SourceFiles {
+	r, _ := ctx.Value(explicitSourceFilesKey{}).(SourceFiles)
 
 	return r
 }

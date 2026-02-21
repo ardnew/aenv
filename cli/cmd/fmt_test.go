@@ -13,14 +13,14 @@ import (
 func withSourceFile(t *testing.T, path string) context.Context {
 	t.Helper()
 
-	return WithSourceFiles(context.Background(), []string{path})
+	return WithExplicitSourceFiles(context.Background(), []string{path})
 }
 
 // withStdin creates a context configured to read from stdin for testing.
 func withStdin(t *testing.T) context.Context {
 	t.Helper()
 
-	return WithSourceFiles(context.Background(), []string{"-"})
+	return WithExplicitSourceFiles(context.Background(), []string{"-"})
 }
 
 // TestNativeFmtValidSyntax tests that valid syntax is formatted correctly.

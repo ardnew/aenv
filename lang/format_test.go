@@ -252,19 +252,26 @@ func TestFormatResult(t *testing.T) {
 			input: map[string]any{"x": 1, "y": "hello"},
 			want:  `{"x": 1, "y": "hello"}`,
 		},
+		{
+			name:  "FuncRef with signature",
+			input: &FuncRef{Name: "add", Signature: "add(x, y)"},
+			want:  "<func: add(x, y)>",
+		},
+		{
+			name:  "FuncRef name only",
+			input: &FuncRef{Name: "cwd", Signature: ""},
+			want:  "<func: cwd>",
+		},
+		{
+			name:  "map with function values",
+			input: map[string]any{"prefix": func(string) string { return "" }},
+			want:  `{"prefix": <func: prefix(_)>}`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := FormatResult(tt.input)
-
-			// For maps, order may vary, so just check it's valid
-			if _, ok := tt.input.(map[string]any); ok && len(tt.input.(map[string]any)) > 0 {
-				if !strings.Contains(got, "\"x\"") && !strings.Contains(got, "\"y\"") {
-					t.Errorf("map format should contain keys")
-				}
-				return
-			}
 
 			if got != tt.want {
 				t.Errorf("FormatResult() = %q, want %q", got, tt.want)

@@ -12,6 +12,15 @@ import (
 	"github.com/ardnew/aenv/lang"
 )
 
+// Type-name strings used in signature parameter display.
+const (
+	typeNameInt    = "int"
+	typeNameFloat  = "float"
+	typeNameString = "string"
+	typeNameArg    = "arg"
+	typeNameArray  = "array"
+)
+
 // signatureCache stores precomputed function signatures to avoid repeated
 // reflection and string building on every keystroke.
 type signatureCache struct {
@@ -181,13 +190,13 @@ buildSignature:
 
 // getGenericParamName returns a semantic parameter name for functions that
 // operate on generic types.
-func getGenericParamName(funcName string, paramIdx int) string {
+func getGenericParamName(funcName string, _ int) string {
 	// Special cases for well-known functions
 	switch funcName {
-	case "len", "type", "int", "float", "string":
+	case "len", "type", typeNameInt, typeNameFloat, typeNameString:
 		return "v"
 	default:
-		return "arg"
+		return typeNameArg
 	}
 }
 
@@ -203,10 +212,9 @@ func extractSignatureFromFuncType(
 		return "", nil, false
 	}
 
-	var params []string
-
 	numParams := funcType.NumIn()
 	isVariadic := funcType.IsVariadic()
+	params := make([]string, 0, numParams)
 
 	for i := range numParams {
 		paramType := funcType.In(i)
@@ -254,7 +262,7 @@ func formatSemanticTypeName(
 	switch funcName {
 	case "join":
 		if paramIdx == 0 {
-			return "array"
+			return typeNameArray
 		}
 
 		if paramIdx == 1 && t.Kind() == reflect.String {
@@ -262,7 +270,7 @@ func formatSemanticTypeName(
 		}
 	case "split":
 		if paramIdx == 0 {
-			return "string"
+			return typeNameString
 		}
 
 		if paramIdx == 1 && t.Kind() == reflect.String {
@@ -280,19 +288,14 @@ func formatSemanticTypeName(
 
 		return "func"
 	case reflect.String:
-		return "string"
+		return typeNameString
 	case reflect.Slice:
-		// Check element type for better naming
-		if t.Elem().Kind() == reflect.Interface {
-			return "array"
-		}
-
-		return "array"
+		return typeNameArray
 	case reflect.Interface:
 		// Generic interface{} - use context-aware name
 		return "v"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return "int"
+		return typeNameInt
 	case reflect.Uint,
 		reflect.Uint8,
 		reflect.Uint16,
@@ -300,7 +303,7 @@ func formatSemanticTypeName(
 		reflect.Uint64:
 		return "uint"
 	case reflect.Float32, reflect.Float64:
-		return "float"
+		return typeNameFloat
 	case reflect.Bool:
 		return "bool"
 	case reflect.Map:
@@ -312,7 +315,7 @@ func formatSemanticTypeName(
 			return t.Name()
 		}
 
-		return "arg"
+		return typeNameArg
 	}
 }
 
@@ -540,10 +543,9 @@ func getBuiltinSignatureUncached(funcName string) (string, []string, bool) {
 	}
 
 	// Build parameter list from type information
-	var params []string
-
 	numParams := t.NumIn()
 	isVariadic := t.IsVariadic()
+	params := make([]string, 0, numParams)
 
 	for i := range numParams {
 		paramType := t.In(i)
@@ -586,9 +588,9 @@ func formatTypeName(t reflect.Type) string {
 	case reflect.Func:
 		return "func"
 	case reflect.String:
-		return "string"
+		return typeNameString
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return "int"
+		return typeNameInt
 	case reflect.Uint,
 		reflect.Uint8,
 		reflect.Uint16,
@@ -596,7 +598,7 @@ func formatTypeName(t reflect.Type) string {
 		reflect.Uint64:
 		return "uint"
 	case reflect.Float32, reflect.Float64:
-		return "float"
+		return typeNameFloat
 	case reflect.Bool:
 		return "bool"
 	case reflect.Slice:
@@ -611,7 +613,7 @@ func formatTypeName(t reflect.Type) string {
 			return t.Name()
 		}
 
-		return "arg"
+		return typeNameArg
 	}
 }
 

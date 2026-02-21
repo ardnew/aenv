@@ -1,5 +1,25 @@
 package lang
 
+// FuncRef is returned by [AST.EvaluateExpr] when the evaluated expression
+// resolves to a callable (a parameterized namespace or a builtin function)
+// rather than a concrete value. It carries the function name and a
+// human-readable signature for display purposes.
+type FuncRef struct {
+	// Name is the bare identifier of the function (e.g. "add").
+	Name string
+	// Signature is a human-readable call signature (e.g. "add(x, y)").
+	// It is empty only when no parameter information could be derived.
+	Signature string
+}
+
+// NewFuncRef creates a [FuncRef] with the given name and signature.
+func NewFuncRef(name, sig string) *FuncRef {
+	return &FuncRef{
+		Name:      name,
+		Signature: sig,
+	}
+}
+
 // NewExpr creates a new expression value from the given source text.
 // The source is passed verbatim to expr-lang for compilation and evaluation.
 //

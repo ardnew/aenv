@@ -14,7 +14,7 @@ type CLI struct {
 	Log   logConfig   `embed:"" group:"log"   prefix:"log-"`
 	Pprof pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
 
-	Source []string `help:"Input source file(s) or '-' for stdin" name:"source" short:"s" type:"existingfile"`
+	Source []string `help:"Source file(s) or '-' for stdin" name:"source" short:"s" type:"existingfile"`
 
 	Init cmd.Init `cmd:"" help:"Initialize configuration file"`
 	Fmt  cmd.Fmt  `cmd:"" help:"Format namespaces"`
@@ -91,7 +91,15 @@ func Run(
 
 	// Stuff additional context values for use by commands
 	ctx = cmd.WithContext(ctx, ktx)
-	ctx = cmd.WithSourceFiles(ctx, cli.Source)
+	// Always include the aenv config file as the first source so its
+	// environment is available in every eval and REPL session.
+	ctx = cmd.WithSourceFiles(
+		ctx,
+		append([]string{configFilePath}, cli.Source...),
+	)
+	// Store only the user-specified sources for commands like fmt that
+	// should not include the implicitly added config file.
+	ctx = cmd.WithExplicitSourceFiles(ctx, cli.Source)
 
 	// Finalize logger configuration with all parsed values including
 	// TimeLayout and Caller which don't use TextUnmarshaler.

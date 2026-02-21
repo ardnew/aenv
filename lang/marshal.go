@@ -115,7 +115,7 @@ func (v *Value) ToNative() any {
 
 	case KindBlock:
 		// Block: convert to map
-		if v.Entries == nil || len(v.Entries) == 0 {
+		if len(v.Entries) == 0 {
 			return make(map[string]any)
 		}
 

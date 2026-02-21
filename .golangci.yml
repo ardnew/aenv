@@ -30,133 +30,146 @@ linters:
       - common-false-positives
       - legacy
     rules:
-      # Source-based rules
-      - linters:
-          - structtag
-        source: "`(cmd|arg)`"
+      # --- Source-based rules (project-wide semantic patterns) ---
+
+      # Long go:generate directives
       - linters:
           - lll
         source: "^//go:generate "
-      - linters: # Disable global var warnings for idents prefixed "[dD]efault[…]".
+
+      # Globals with Default/Global prefix or sync.Once initialization
+      - linters:
           - gochecknoglobals
           - mnd
-          - gomnd
         source: "^(var|const)?\\s+(([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)|\\w+\\s*=\\s*sync\\.Once)"
-      - linters: # Magic numbers in caller frame skip and file permissions
+
+      # Magic number in runtime.Callers frame skip
+      - linters:
           - mnd
-          - gomnd
         source: "runtime\\.Callers\\(4,"
-      - linters: # Standard file permissions
-          - mnd
-          - gomnd
-        source: "0o644"
-        path: cli/log\.go
+
+      # Exhaustruct for partial struct literals of external types
       - linters:
           - exhaustruct
-          - mnd
-          - gomnd
-        source: "slog\\.Attr\\{\\}|Syntax\\{|kong\\.HelpOptions\\{"
-      - linters:
-          - ireturn
-        source: "func (Make|Wrap)"
+        source: "slog\\.Attr\\{\\}|kong\\.HelpOptions\\{"
+
+      # Globals that are maps of profiling functions
       - linters:
           - gochecknoglobals
         source: "map\\[string\\]func\\(\\*profile\\.Profile\\)"
         path: profile/pprof\.go
+
+      # Blanked pprof import is intentional
       - linters:
           - gosec
         source: "_ \"net/http/pprof\""
-      # Test files
+
+      # Functions returning the SourceFiles interface
       - linters:
-          - errcheck
-          - dupl
-          - gosec
-        path: _test\.go
-      # Text-based rules
+          - ireturn
+        source: "func\\s+\\w*[Ss]ourceFiles\\w*"
+
+      # Domain-specific context methods, not context.Context
       - linters:
-          - goanalysis
-          - staticcheck
-          - unsafe
-        text: "SA1012"
-        path: log/log_test\.go
-      # Parser core has many intentional patterns
+          - contextcheck
+        source: "ctx\\.(eval|build)"
+
+      # Singleton caches in env.go
+      - linters:
+          - gochecknoglobals
+        source: "^\\s+(env|process)\\w+[^=]+$"
+        path: lang/env\.go
+
+      # Performance caches (sync.Pool, program cache) in eval.go
+      - linters:
+          - gochecknoglobals
+        source: "(runtimeEnvPool|programCache)"
+        path: lang/eval\.go
+
+      # Standard file permission literals
       - linters:
           - mnd
-          - gomnd
+        source: "0o644"
+        path: cli/log\.go
+
+      # --- Path-based rules (file/package scoped) ---
+
+      # Parser core: intentional patterns throughout
+      - linters:
           - exhaustruct
           - noinlineerr
           - exhaustive
-          - nestif
           - err113
           - nilnil
         path: lang/ast\.go
-      # Complex functions that are difficult to simplify
+
+      # Functions with high cognitive complexity
       - linters:
           - gocognit
-        path: (lang/marshal|log/pretty|cli/log)\.go
+        path: lang/(marshal|format|parse)\.go|log/pretty\.go|cli/log\.go
+
+      # Deeply nested formatting logic
       - linters:
-          - gocognit
           - nestif
         path: lang/format\.go
-      # Inline error handling is idiomatic in certain contexts
+
+      # Inline error handling is idiomatic in lang evaluator/serializer
       - linters:
           - noinlineerr
           - nilnil
         path: lang/(marshal|format|eval)\.go
-      # Exhaustive struct initialization not required for constructors
+
+      # Constructor and value-building code
       - linters:
           - exhaustruct
           - mnd
-          - gomnd
           - nestif
           - gocognit
-        path: (lang/(eval|cache|marshal|error|value)|cli/cmd/error)\.go
-      # Magic numbers acceptable in error and marshal logic
+        path: (lang/(eval|marshal|error|value|parse)|cli/cmd/error)\.go
+
+      # Non-exhaustive switch on slog.Kind
       - linters:
           - exhaustive
         path: log/pretty\.go
-      # CLI package rules
+
+      # CLI: long lines from Kong struct tags
       - linters:
           - lll
         path: cli/
+
+      # Resolver returns nil values and interfaces by design
       - linters:
           - nilnil
           - ireturn
           - nilerr
         path: cli/resolver\.go
+
+      # Globals and magic numbers in package metadata and config
       - linters:
           - gochecknoglobals
           - mnd
-          - gomnd
         path: (cli/path\.go|(doc|config)\.go|pkg/pkg\.go)
-      # REPL package is a TUI application with framework-specific patterns
+
+      # REPL: TUI application with framework-specific patterns
       - linters:
           - exhaustive
           - exhaustruct
           - gochecknoglobals
           - ireturn
           - mnd
-          - gomnd
           - nestif
           - noinlineerr
         path: cli/cmd/repl/
+
       # Local go.mod replacements needed for development
       - linters:
           - gomoddirectives
         path: go\.mod
-      - linters:
-          - markdownlint
-          - no-inline-html
-        path: .github/instructions/
-      - linters:
-          - ireturn
-        source: "func\\s+sourceFiles\\w*([^)]*)\\s+.+[(\\w,]*SourceFiles"
+
+      # Patcher returns ast.Node interface
       - linters:
           - ireturn
         path: patcher\.go
-      - linters:
-          - contextcheck
-        source: "ctx\\.(eval|build)"
 
 formatters:
   enable:

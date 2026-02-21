@@ -8,56 +8,6 @@ import (
 	"github.com/ardnew/aenv/log"
 )
 
-// namespacePatcher patches identifier nodes that match non-parameterized
-// namespace names with constant values.
-type namespacePatcher struct {
-	resolved map[string]any // name → resolved Go value
-	logger   log.Logger
-}
-
-// Visit implements ast.Visitor for namespacePatcher.
-func (p *namespacePatcher) Visit(node *ast.Node) {
-	ident, ok := (*node).(*ast.IdentifierNode)
-	if !ok {
-		return
-	}
-
-	val, exists := p.resolved[ident.Value]
-	if !exists {
-		return
-	}
-
-	// Patch with constant node
-	constNode := toConstantNode(val)
-	if constNode != nil {
-		ast.Patch(node, constNode)
-		p.logger.Trace("patch namespace",
-			slog.String("name", ident.Value),
-			slog.String("type", resultTypeName(val)))
-	}
-}
-
-// toConstantNode converts a Go value to an expr-lang constant node.
-func toConstantNode(val any) ast.Node {
-	switch v := val.(type) {
-	case nil:
-		return &ast.NilNode{}
-	case bool:
-		return &ast.BoolNode{Value: v}
-	case int:
-		return &ast.IntegerNode{Value: v}
-	case int64:
-		return &ast.IntegerNode{Value: int(v)}
-	case float64:
-		return &ast.FloatNode{Value: v}
-	case string:
-		return &ast.StringNode{Value: v}
-	default:
-		// For complex types (maps, slices, structs), use ConstantNode
-		return &ast.ConstantNode{Value: val}
-	}
-}
-
 // hyphenPatcher reconstructs hyphenated identifiers from BinaryNode("-")
 // subtraction chains created by expr-lang's parser.
 //

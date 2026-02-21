@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,8 +19,6 @@ import (
 )
 
 // runtimeEnvPool pools runtime environment maps to reduce allocations.
-//
-//nolint:gochecknoglobals
 var runtimeEnvPool = sync.Pool{
 	New: func() any {
 		// Pre-allocate with reasonable capacity
@@ -29,8 +29,6 @@ var runtimeEnvPool = sync.Pool{
 
 // programCache caches compiled expr programs to avoid recompilation.
 // Key is the source string; value is the compiled program.
-//
-//nolint:gochecknoglobals
 var (
 	programCacheMu sync.RWMutex
 	programCache   = make(map[string]*vm.Program)
@@ -274,9 +272,9 @@ func (a *AST) EvaluateExpr(
 			With(slog.String("source", source))
 	}
 
-	// If result is a function, return nil (like expr-lang builtins)
+	// If result is a function, return a FuncRef describing it.
 	if isFunction(result) {
-		result = nil
+		result = NewFuncRef(source, funcRefSignature(source, result, a))
 	}
 
 	logger.TraceContext(
@@ -440,7 +438,10 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 // returnRuntimeEnv().
 func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 	// Get pooled map
-	env := runtimeEnvPool.Get().(map[string]any)
+	env, ok := runtimeEnvPool.Get().(map[string]any)
+	if !ok {
+		env = make(map[string]any, 32)
+	}
 
 	// Clear any leftover entries (should be empty, but ensure it)
 	for k := range env {
@@ -698,6 +699,13 @@ func formatResultValue(v any) string {
 		// Always quote strings for expr-lang compatibility
 		return strconv.Quote(val)
 
+	case *FuncRef:
+		if val.Signature != "" {
+			return "<func: " + val.Signature + ">"
+		}
+
+		return "<func: " + val.Name + ">"
+
 	case []any:
 		return formatSlice(val)
 
@@ -705,6 +713,10 @@ func formatResultValue(v any) string {
 		return formatMap(val)
 
 	default:
+		if isFunction(v) {
+			return formatFuncValue("", v)
+		}
+
 		return fmt.Sprintf("%v", val)
 	}
 }
@@ -724,27 +736,42 @@ func formatSlice(vals []any) string {
 }
 
 // formatMap formats a map as expr-lang map syntax.
+// Keys are sorted lexicographically for deterministic output.
 func formatMap(m map[string]any) string {
 	if len(m) == 0 {
 		return "{}"
 	}
 
-	parts := make([]string, 0, len(m))
+	keys := sortedKeys(m)
+	parts := make([]string, len(keys))
 
-	for k, v := range m {
-		parts = append(parts, strconv.Quote(k)+": "+formatResultValue(v))
+	for i, k := range keys {
+		v := m[k]
+
+		var vFormatted string
+		if isFunction(v) {
+			// Pass the map key so the signature is derived with a meaningful
+			// name rather than an empty string.
+			vFormatted = formatFuncValue(k, v)
+		} else {
+			vFormatted = formatResultValue(v)
+		}
+
+		parts[i] = strconv.Quote(k) + ": " + vFormatted
 	}
 
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
-// sortedKeys returns a sorted list of keys from a map for deterministic
-// logging.
+// sortedKeys returns a lexicographically sorted list of keys from a map
+// for deterministic logging and output.
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
+
+	slices.Sort(keys)
 
 	return keys
 }
@@ -770,7 +797,7 @@ func formatNamespaceSignature(ns *Namespace) string {
 
 // enhanceFunctionError checks if an error is related to a function call and
 // adds signature information if available.
-func enhanceFunctionError(err error, source string, ast *AST) *Error {
+func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 	// First check if the error chain contains ErrArgumentCount, which already
 	// has signature information attached. If so, wrap it with ErrExprEvaluate
 	// while preserving the attributes.
@@ -840,17 +867,65 @@ func enhanceFunctionError(err error, source string, ast *AST) *Error {
 	return ErrExprEvaluate.Wrap(err)
 }
 
-// isFunction checks if a value is a function type.
+// isFunction reports whether v is any callable Go value.
+// It uses reflection so that all function types — including builtin helpers
+// with concrete signatures (e.g. func() string) — are detected correctly,
+// not just the variadic func(...any)(any,error) used for user namespaces.
 func isFunction(v any) bool {
 	if v == nil {
 		return false
 	}
 
-	// Check for function types that would be returned by expr-lang
-	switch v.(type) {
-	case func(...any) (any, error):
-		return true
-	default:
-		return false
+	return reflect.TypeOf(v).Kind() == reflect.Func
+}
+
+// funcRefSignature derives a human-readable call signature for a function
+// value. For user-defined parameterized namespaces the signature is built
+// from the AST parameter list (e.g. "add(x, y)"). For builtin functions it
+// delegates to [funcSignatureFromReflect].
+func funcRefSignature(name string, result any, a *AST) string {
+	// Prefer exact parameter names for user-defined namespaces.
+	if ns, ok := a.GetNamespace(name); ok && len(ns.Params) > 0 {
+		return formatNamespaceSignature(ns)
 	}
+
+	return funcSignatureFromReflect(name, result)
+}
+
+// funcSignatureFromReflect derives a call signature from a Go function value
+// using reflection alone (no AST required). Non-variadic parameters become
+// "_" placeholders (e.g. "upper(_)"). Zero-parameter functions produce
+// "name()". If fn is not a function, name is returned unchanged.
+func funcSignatureFromReflect(name string, fn any) string {
+	t := reflect.TypeOf(fn)
+	if t == nil || t.Kind() != reflect.Func {
+		return name
+	}
+
+	numIn := t.NumIn()
+	if t.IsVariadic() {
+		numIn-- // count only non-variadic leading params
+	}
+
+	if numIn <= 0 {
+		return name + "()"
+	}
+
+	params := make([]string, numIn)
+	for i := range params {
+		params[i] = "_"
+	}
+
+	return name + "(" + strings.Join(params, ", ") + ")"
+}
+
+// formatFuncValue formats an anonymous Go function value for display.
+// When name is non-empty it is used as the function identifier;
+// otherwise the output is simply "<func>".
+func formatFuncValue(name string, fn any) string {
+	if name == "" {
+		return "<func>"
+	}
+
+	return "<func: " + funcSignatureFromReflect(name, fn) + ">"
 }

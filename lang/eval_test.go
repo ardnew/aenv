@@ -534,7 +534,7 @@ func TestEvaluateExpr_FunctionSignatureInError(t *testing.T) {
 	}
 }
 
-func TestEvaluateExpr_FunctionIdentifierReturnsNil(t *testing.T) {
+func TestEvaluateExpr_FunctionIdentifier_ReturnsFuncRef(t *testing.T) {
 	input := `add x y : x + y`
 
 	ast, err := ParseString(context.Background(), input)
@@ -542,14 +542,23 @@ func TestEvaluateExpr_FunctionIdentifierReturnsNil(t *testing.T) {
 		t.Fatalf("parse error: %v", err)
 	}
 
-	// Evaluating the function identifier directly should return nil
+	// Evaluating a function identifier should return a *FuncRef, not nil.
 	result, err := ast.EvaluateExpr(context.Background(), "add")
 	if err != nil {
 		t.Fatalf("evaluate error: %v", err)
 	}
 
-	if result != nil {
-		t.Errorf("expected nil for function identifier, got %v (%T)", result, result)
+	ref, ok := result.(*FuncRef)
+	if !ok {
+		t.Fatalf("expected *FuncRef, got %T (%v)", result, result)
+	}
+
+	if ref.Name != "add" {
+		t.Errorf("Name: expected %q, got %q", "add", ref.Name)
+	}
+
+	if ref.Signature != "add(x, y)" {
+		t.Errorf("Signature: expected %q, got %q", "add(x, y)", ref.Signature)
 	}
 }
 

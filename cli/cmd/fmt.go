@@ -23,7 +23,7 @@ type Native struct {
 
 // Run executes the fmt command.
 func (f *Native) Run(ctx context.Context) error {
-	reader := sourceFilesFrom(ctx)
+	reader := explicitSourceFilesFrom(ctx)
 	if reader == nil {
 		return NewError("require source files")
 	}
@@ -44,7 +44,7 @@ type JSON struct {
 
 // Run executes the json command.
 func (j *JSON) Run(ctx context.Context) error {
-	reader := sourceFilesFrom(ctx)
+	reader := explicitSourceFilesFrom(ctx)
 	if reader == nil {
 		return NewError("require source files")
 	}
@@ -65,7 +65,7 @@ type YAML struct {
 
 // Run executes the yaml command.
 func (y *YAML) Run(ctx context.Context) error {
-	reader := sourceFilesFrom(ctx)
+	reader := explicitSourceFilesFrom(ctx)
 	if reader == nil {
 		return NewError("require source files")
 	}
@@ -84,7 +84,7 @@ type AST struct{}
 
 // Run executes the ast command.
 func (a *AST) Run(ctx context.Context) error {
-	reader := sourceFilesFrom(ctx)
+	reader := explicitSourceFilesFrom(ctx)
 	if reader == nil {
 		return NewError("require source files")
 	}
