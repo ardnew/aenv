@@ -13,6 +13,7 @@
 *.prof
 
 /notes.md
+/internal/*.md
 /*.txt
 /*.svg
 
