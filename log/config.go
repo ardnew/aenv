@@ -6,6 +6,8 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -240,15 +242,41 @@ func WithDefaults(w io.Writer) Option {
 	}
 }
 
-// WithOutput returns a functional option that sets the output [io.Writer]
+// WithOutput returns a functional option that sets the output [io.Writer]s
 // for log messages.
-// If a nil writer is provided, [io.Discard] is used instead.
-func WithOutput(w io.Writer) Option {
+// If multiple writers are provided, they are combined with [io.MultiWriter].
+// If no writers are provided, the output is left unchanged.
+// If a single nil writer is provided, [io.Discard] is used instead.
+// All other nil writers are ignored.
+func WithOutput(w ...io.Writer) Option {
 	return func(c config) config {
-		if w == nil {
-			w = io.Discard
+		// Remove duplicates
+		seen := make(map[io.Writer]struct{}, len(w))
+		for _, writer := range w {
+			seen[writer] = struct{}{}
 		}
 
+		// Handle based on length
+		switch len(seen) {
+		case 0:
+			return c
+
+		case 1:
+			if _, ok := seen[nil]; ok {
+				w = []io.Writer{io.Discard}
+			} else {
+				// Extract writer from the single-element map
+				for writer := range seen {
+					w = []io.Writer{writer}
+				}
+			}
+
+		default:
+			delete(seen, nil)
+			w = slices.Collect(maps.Keys(seen))
+		}
+
+		// Acquire lock and set output
 		if c.mutex == nil {
 			c.mutex = &sync.RWMutex{}
 		} else {
@@ -256,7 +284,12 @@ func WithOutput(w io.Writer) Option {
 			defer c.mutex.Unlock()
 		}
 
-		c.output = w
+		// Optimize for single writer (avoid MultiWriter overhead)
+		if len(w) == 1 {
+			c.output = w[0]
+		} else {
+			c.output = io.MultiWriter(w...)
+		}
 
 		return c
 	}

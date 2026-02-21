@@ -27,7 +27,7 @@ var (
 	envCacheOnce sync.Once
 	envCache     map[string]any
 
-	// Process environment cache (only for default os.Environ())
+	// Process environment cache (only for default os.Environ()).
 	processEnvCacheOnce sync.Once
 	processEnvCache     map[string]string
 )
@@ -390,12 +390,14 @@ func buildProcessEnvMap(envList []string, keyVal ...string) map[string]string {
 				result[key] = value
 			}
 		}
+
 		return result
 	}
 
 	// Use cached default process environment (os.Environ())
 	processEnvCacheOnce.Do(func() {
 		envList := os.Environ()
+
 		processEnvCache = make(map[string]string, len(envList))
 		for _, entry := range envList {
 			key, value, ok := strings.Cut(entry, "=")

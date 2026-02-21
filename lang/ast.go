@@ -93,6 +93,7 @@ func (a *AST) GetNamespace(name string) (*Namespace, bool) {
 	// Use index for O(1) lookup if available
 	if a.index != nil {
 		ns, ok := a.index[name]
+
 		return ns, ok
 	}
 
@@ -155,6 +156,7 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 			if a.index != nil {
 				a.index[name] = ns
 			}
+
 			return
 		}
 	}
@@ -173,6 +175,7 @@ func (a *AST) buildIndex() {
 	if len(a.Namespaces) == 0 {
 		return
 	}
+
 	a.index = make(map[string]*Namespace, len(a.Namespaces))
 	for _, ns := range a.Namespaces {
 		a.index[ns.Name] = ns

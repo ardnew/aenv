@@ -20,11 +20,11 @@ type signatureCache struct {
 }
 
 var (
-	// exprLangCache caches signatures for expr-lang builtin functions
+	// exprLangCache caches signatures for expr-lang builtin functions.
 	exprLangCache     map[string]signatureCache
 	exprLangCacheOnce sync.Once
 
-	// projectBuiltinCache caches signatures for project builtin functions
+	// projectBuiltinCache caches signatures for project builtin functions.
 	projectBuiltinCache     map[string]signatureCache
 	projectBuiltinCacheOnce sync.Once
 )
@@ -56,6 +56,7 @@ func initProjectBuiltinCache() {
 		if m, ok := env[key].(map[string]any); ok {
 			for subkey := range m {
 				fullName := key + "." + subkey
+
 				sig, params, ok := getBuiltinSignatureUncached(fullName)
 				if ok {
 					projectBuiltinCache[fullName] = signatureCache{
@@ -93,7 +94,9 @@ func getExprLangBuiltinSignature(funcName string) (string, []string, bool) {
 // getExprLangBuiltinSignatureUncached extracts the signature for an expr-lang
 // builtin function using reflection. This is the uncached implementation used
 // during cache initialization.
-func getExprLangBuiltinSignatureUncached(funcName string) (string, []string, bool) {
+func getExprLangBuiltinSignatureUncached(
+	funcName string,
+) (string, []string, bool) {
 	// Look up the function in expr-lang's builtin index
 	idx, ok := builtin.Index[funcName]
 	if !ok {
@@ -112,8 +115,10 @@ func getExprLangBuiltinSignatureUncached(funcName string) (string, []string, boo
 	}
 
 	// Fallback: extract from Fast/Func/Safe functions
-	var params []string
-	var funcToInspect any
+	var (
+		params        []string
+		funcToInspect any
+	)
 
 	switch {
 	case fn.Fast != nil:
@@ -125,6 +130,7 @@ func getExprLangBuiltinSignatureUncached(funcName string) (string, []string, boo
 	default:
 		// No function to inspect - use special case or generic parameter
 		params = []string{getGenericParamName(funcName, 0)}
+
 		goto buildSignature
 	}
 
@@ -156,6 +162,7 @@ func getExprLangBuiltinSignatureUncached(funcName string) (string, []string, boo
 buildSignature:
 	// Build signature string
 	var sig strings.Builder
+
 	sig.WriteString(funcName)
 	sig.WriteString("(")
 
@@ -184,15 +191,20 @@ func getGenericParamName(funcName string, paramIdx int) string {
 	}
 }
 
-// extractSignatureFromFuncType extracts a function signature from a reflect.Type
+// extractSignatureFromFuncType extracts a function signature from a
+// reflect.Type
 // representing a function. It provides semantic parameter names based on the
 // parameter types.
-func extractSignatureFromFuncType(funcName string, funcType reflect.Type) (string, []string, bool) {
+func extractSignatureFromFuncType(
+	funcName string,
+	funcType reflect.Type,
+) (string, []string, bool) {
 	if funcType.Kind() != reflect.Func {
 		return "", nil, false
 	}
 
 	var params []string
+
 	numParams := funcType.NumIn()
 	isVariadic := funcType.IsVariadic()
 
@@ -233,13 +245,18 @@ func extractSignatureFromFuncType(funcName string, funcType reflect.Type) (strin
 // formatSemanticTypeName converts a reflect.Type to a semantic parameter name.
 // This provides better names than formatTypeName by considering the type's
 // structure and the function context.
-func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) string {
+func formatSemanticTypeName(
+	funcName string,
+	paramIdx int,
+	t reflect.Type,
+) string {
 	// Special cases for common expr-lang builtin patterns
 	switch funcName {
 	case "join":
 		if paramIdx == 0 {
 			return "array"
 		}
+
 		if paramIdx == 1 && t.Kind() == reflect.String {
 			return "separator"
 		}
@@ -247,6 +264,7 @@ func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) strin
 		if paramIdx == 0 {
 			return "string"
 		}
+
 		if paramIdx == 1 && t.Kind() == reflect.String {
 			return "separator"
 		}
@@ -259,6 +277,7 @@ func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) strin
 		if t.NumOut() > 0 && t.Out(0).Kind() == reflect.Bool {
 			return "predicate"
 		}
+
 		return "func"
 	case reflect.String:
 		return "string"
@@ -267,13 +286,18 @@ func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) strin
 		if t.Elem().Kind() == reflect.Interface {
 			return "array"
 		}
+
 		return "array"
 	case reflect.Interface:
 		// Generic interface{} - use context-aware name
 		return "v"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return "int"
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64:
 		return "uint"
 	case reflect.Float32, reflect.Float64:
 		return "float"
@@ -287,6 +311,7 @@ func formatSemanticTypeName(funcName string, paramIdx int, t reflect.Type) strin
 		if t.Name() != "" {
 			return t.Name()
 		}
+
 		return "arg"
 	}
 }

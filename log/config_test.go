@@ -1,6 +1,8 @@
 package log
 
 import (
+	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +194,109 @@ func BenchmarkConfig_formatTime_NanosecondResolution(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = c.formatTime(testTime)
+	}
+}
+
+func TestConfig_WithOutput_EmptyInput_LeavesUnchanged(t *testing.T) {
+	original := &bytes.Buffer{}
+	c := config{output: original}
+
+	result := WithOutput()(c)
+
+	if result.output != original {
+		t.Errorf("expected output to remain unchanged")
+	}
+}
+
+func TestConfig_WithOutput_SingleNilWriter_UsesDiscard(t *testing.T) {
+	c := config{}
+
+	result := WithOutput(nil)(c)
+
+	if result.output != io.Discard {
+		t.Errorf("expected io.Discard for single nil writer, got %v", result.output)
+	}
+}
+
+func TestConfig_WithOutput_SingleWriter_SetsDirectly(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := config{}
+
+	result := WithOutput(buf)(c)
+
+	if result.output != buf {
+		t.Errorf("expected output to be set to buffer directly")
+	}
+}
+
+func TestConfig_WithOutput_MultipleUniqueWriters_UsesMultiWriter(t *testing.T) {
+	buf1 := &bytes.Buffer{}
+	buf2 := &bytes.Buffer{}
+	c := config{}
+
+	result := WithOutput(buf1, buf2)(c)
+
+	// Write to the output and verify both buffers receive it
+	_, _ = result.output.Write([]byte("test"))
+
+	if buf1.String() != "test" || buf2.String() != "test" {
+		t.Errorf("expected both buffers to receive write, got %q and %q",
+			buf1.String(), buf2.String())
+	}
+}
+
+func TestConfig_WithOutput_DuplicateWriters_Deduplicates(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := config{}
+
+	result := WithOutput(buf, buf, buf)(c)
+
+	// Should deduplicate to single writer
+	_, _ = result.output.Write([]byte("x"))
+
+	// If not deduplicated, would write 3 times resulting in "xxx"
+	if buf.String() != "x" {
+		t.Errorf("expected single write due to deduplication, got %q", buf.String())
+	}
+}
+
+func TestConfig_WithOutput_MultipleWritersWithNils_RemovesNils(t *testing.T) {
+	buf1 := &bytes.Buffer{}
+	buf2 := &bytes.Buffer{}
+	c := config{}
+
+	result := WithOutput(buf1, nil, buf2, nil)(c)
+
+	// Write to the output and verify only non-nil buffers receive it
+	_, _ = result.output.Write([]byte("test"))
+
+	if buf1.String() != "test" || buf2.String() != "test" {
+		t.Errorf("expected both non-nil buffers to receive write, got %q and %q",
+			buf1.String(), buf2.String())
+	}
+}
+
+func TestConfig_WithOutput_AllNilWriters_UsesDiscard(t *testing.T) {
+	c := config{}
+
+	result := WithOutput(nil, nil, nil)(c)
+
+	// Multiple nils should deduplicate to single nil, then use io.Discard
+	if result.output != io.Discard {
+		t.Errorf("expected io.Discard for all nil writers, got %v", result.output)
+	}
+}
+
+func TestConfig_WithOutput_DuplicatesWithNil_DeduplicatesAndRemovesNil(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := config{}
+
+	result := WithOutput(buf, nil, buf, nil, buf)(c)
+
+	// Should deduplicate to just buf (single writer)
+	_, _ = result.output.Write([]byte("x"))
+
+	if buf.String() != "x" {
+		t.Errorf("expected single write due to deduplication, got %q", buf.String())
 	}
 }

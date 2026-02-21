@@ -37,20 +37,28 @@ var (
 )
 
 // compileExpr compiles an expression, using cache when possible.
-func compileExpr(source string, env map[string]any, patcher expr.Option) (*vm.Program, error) {
+func compileExpr(
+	source string,
+	env map[string]any,
+	patcher expr.Option,
+) (*vm.Program, error) {
 	// Check cache first (read lock)
 	programCacheMu.RLock()
+
 	if prog, ok := programCache[source]; ok {
 		programCacheMu.RUnlock()
+
 		return prog, nil
 	}
+
 	programCacheMu.RUnlock()
 
 	// Not in cache, compile it (write lock)
 	programCacheMu.Lock()
 	defer programCacheMu.Unlock()
 
-	// Double-check after acquiring write lock (another goroutine may have added it)
+	// Double-check after acquiring write lock (another goroutine may have added
+	// it)
 	if prog, ok := programCache[source]; ok {
 		return prog, nil
 	}
@@ -76,6 +84,7 @@ func compileExpr(source string, env map[string]any, patcher expr.Option) (*vm.Pr
 func ClearProgramCache() {
 	programCacheMu.Lock()
 	defer programCacheMu.Unlock()
+
 	programCache = make(map[string]*vm.Program)
 }
 
@@ -427,7 +436,8 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 }
 
 // buildRuntimeEnv constructs the environment for expr execution.
-// The returned map is from a pool and should be returned via returnRuntimeEnv().
+// The returned map is from a pool and should be returned via
+// returnRuntimeEnv().
 func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 	// Get pooled map
 	env := runtimeEnvPool.Get().(map[string]any)
@@ -487,6 +497,7 @@ func returnRuntimeEnv(env map[string]any) {
 	for k := range env {
 		delete(env, k)
 	}
+
 	runtimeEnvPool.Put(env)
 }
 
