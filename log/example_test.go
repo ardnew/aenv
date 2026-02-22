@@ -15,9 +15,9 @@ func Example_configuration() {
 	logger := Make(os.Stdout,
 		WithLevel(LevelDebug),
 		WithTimeLayout("RFC3339Nano"),
-		WithCaller(true))
+		WithCallsite(true))
 
-	logger.Debug("debug message with caller info")
+	logger.Debug("debug message with callsite info")
 }
 
 func Example_levels() {

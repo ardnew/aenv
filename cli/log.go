@@ -45,13 +45,13 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 var DefaultLogOutput = os.Stderr
 
 type logConfig struct {
-	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level"                                                       placeholder:"${enum}"`
-	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format"                                                      placeholder:"${enum}"`
-	Output     logOutput `                                          help:"Log output file(s) or - for stdout"                                  placeholder:"PATH"    name:"output" short:"o" type:"path"`
+	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"`
+	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format (${enum})"`
+	Output     logOutput `                                          help:"Log output file(s) ('-' for stdout)" placeholder:"PATH" short:"o" type:"path"`
 	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
-	Caller     bool      `default:"false"                           help:"Include caller information"                                                                                                       negatable:""`
-	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"                                                                                                 negatable:""`
-	Verbose    int       `                                          help:"Increase log verbosity (-v=debug, -vv=trace, overrides --log-level)"                                     short:"v" type:"counter"`
+	Callsite   bool      `default:"false"                           help:"Include callsite information"                                                    negatable:""`
+	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"                                                negatable:""`
+	Verbose    int       `                                          help:"Increment log verbosity"                                short:"v" type:"counter"`
 }
 
 func (*logConfig) vars() kong.Vars {
@@ -78,7 +78,7 @@ func (f *logConfig) start(ctx context.Context) func() {
 		log.WithLevel(level),
 		log.WithFormat(log.ParseFormat(string(f.Format))),
 		log.WithTimeLayout(f.TimeLayout),
-		log.WithCaller(f.Caller),
+		log.WithCallsite(f.Callsite),
 		log.WithPretty(f.Pretty),
 	}
 
@@ -144,7 +144,7 @@ func (f *logConfig) start(ctx context.Context) func() {
 		slog.String("level", level.String()),
 		slog.String("format", string(f.Format)),
 		slog.String("time", f.TimeLayout),
-		slog.Bool("caller", f.Caller),
+		slog.Bool("callsite", f.Callsite),
 		slog.Bool("pretty", f.Pretty),
 	}
 	if f.Verbose > 0 {
@@ -186,13 +186,13 @@ func (f *logConfig) scan(args []string) {
 
 	// Define log-related flags
 	var (
-		level    = fs.String("log-level", "", "")
-		format   = fs.String("log-format", "", "")
-		pretty   = fs.Bool("log-pretty", false, "")
-		noPretty = fs.Bool("no-log-pretty", false, "")
-		caller   = fs.Bool("log-caller", false, "")
-		noCaller = fs.Bool("no-log-caller", false, "")
-		verbose  = fs.Int("log-verbose", 0, "")
+		level      = fs.String("log-level", "", "")
+		format     = fs.String("log-format", "", "")
+		pretty     = fs.Bool("log-pretty", false, "")
+		noPretty   = fs.Bool("no-log-pretty", false, "")
+		callsite   = fs.Bool("log-callsite", false, "")
+		noCallsite = fs.Bool("no-log-callsite", false, "")
+		verbose    = fs.Int("log-verbose", 0, "")
 	)
 	fs.IntVar(verbose, "v", 0, "") // Short form alias
 
@@ -291,37 +291,44 @@ func (f *logConfig) scan(args []string) {
 		log.Config(log.WithPretty(false))
 	}
 
-	if *caller {
-		f.Caller = true
+	if *callsite {
+		f.Callsite = true
 
-		log.Config(log.WithCaller(true))
+		log.Config(log.WithCallsite(true))
 	}
 
-	if *noCaller {
-		f.Caller = false
+	if *noCallsite {
+		f.Callsite = false
 
-		log.Config(log.WithCaller(false))
+		log.Config(log.WithCallsite(false))
 	}
 }
 
-// verboseTrace is the verbosity level that enables trace-level logging.
-const verboseTrace = 2
+// levelStep is the numeric gap between adjacent named log levels.
+// This mirrors the slog convention where levels are spaced 4 apart
+// (e.g., trace=-8, debug=-4, info=0, warn=4, error=8).
+const levelStep = 4
 
-// applyVerbosity determines the effective log level based on verbosity flag.
-// Verbosity overrides any explicitly set log level:
+// applyVerbosity determines the effective log level by adjusting the
+// configured level relatively based on the verbosity count. Each -v flag
+// increases verbosity by one named level (decreases the numeric level by
+// [levelStep]). The result is clamped to [log.LevelTrace] as the minimum.
 //
-//	-v or --verbose    : debug level
-//	-vv or --verbose=2 : trace level
-//	(no -v flag)       : use configured Level
+// Examples (assuming default level is info):
+//
+//	--log-level=info  -v   => info  + 1 = debug
+//	--log-level=error -vv  => error + 2 = info
+//	-v --log-level=error   => error + 1 = warn
+//	--log-level=warn  -v   => warn  + 1 = info
 func (f *logConfig) applyVerbosity() log.Level {
-	switch {
-	case f.Verbose >= verboseTrace:
+	base := log.ParseLevel(string(f.Level))
+	adjusted := base - log.Level(f.Verbose*levelStep)
+
+	if adjusted < log.LevelTrace {
 		return log.LevelTrace
-	case f.Verbose == 1:
-		return log.LevelDebug
-	default:
-		return log.ParseLevel(string(f.Level))
 	}
+
+	return adjusted
 }
 
 type logOutput []string

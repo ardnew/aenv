@@ -14,7 +14,7 @@ type CLI struct {
 	Log   logConfig   `embed:"" group:"log"   prefix:"log-"`
 	Pprof pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
 
-	Source []string `help:"Source file(s) or '-' for stdin" name:"source" short:"s" type:"existingfile"`
+	Source []string `help:"Include source file(s) ('-' for stdin)" placeholder:"PATH" short:"s" type:"existingfile"`
 
 	Init cmd.Init `cmd:"" help:"Initialize configuration file"`
 	Fmt  cmd.Fmt  `cmd:"" help:"Format namespaces"`
@@ -71,7 +71,7 @@ func Run(
 			kong.HelpOptions{
 				Compact:             true,
 				Summary:             true,
-				Tree:                true,
+				Tree:                false,
 				FlagsLast:           false,
 				NoAppSummary:        false,
 				NoExpandSubcommands: true,

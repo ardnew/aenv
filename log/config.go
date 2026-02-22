@@ -111,9 +111,9 @@ type FormatTime func(time.Time) string
 // DefaultTimeLayout is the default used when no valid time layout is provided.
 const DefaultTimeLayout = time.RFC3339
 
-// DefaultCaller is the default setting for including caller information
+// DefaultCallsite is the default setting for including callsite information
 // in log output.
-const DefaultCaller = false
+const DefaultCallsite = false
 
 // DefaultPretty is the default setting for pretty printing log output.
 const DefaultPretty = true
@@ -125,7 +125,7 @@ type config struct {
 	formatTime FormatTime
 	level      Level
 	format     Format
-	caller     bool
+	callsite   bool
 	pretty     bool
 }
 
@@ -153,7 +153,7 @@ func (c config) handler(opts ...Option) slog.Handler {
 	// makeOpts is not called unless needed.
 	makeOpts := func(cfg config) (io.Writer, *slog.HandlerOptions) {
 		return cfg.output, &slog.HandlerOptions{
-			AddSource: cfg.caller,
+			AddSource: cfg.callsite,
 			Level:     slog.Level(cfg.level),
 			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 				if a.Key == slog.TimeKey {
@@ -217,7 +217,7 @@ func (c config) handler(opts ...Option) slog.Handler {
 
 // WithDefaults returns a functional option that sets the default configuration.
 // The default configuration is [DefaultTimeLayout], [DefaultLevel],
-// [DefaultFormat], and caller info disabled.
+// [DefaultFormat], and callsite info disabled.
 func WithDefaults(w io.Writer) Option {
 	return func(c config) config {
 		if w == nil {
@@ -235,7 +235,7 @@ func WithDefaults(w io.Writer) Option {
 		c.formatTime = makeFormatTimeFunc(DefaultTimeLayout)
 		c.level = DefaultLevel
 		c.format = DefaultFormat
-		c.caller = DefaultCaller
+		c.callsite = DefaultCallsite
 		c.pretty = DefaultPretty
 
 		return c
@@ -355,9 +355,9 @@ func WithTimeLayout(layout string) Option {
 	}
 }
 
-// WithCaller returns a functional option that controls whether caller
+// WithCallsite returns a functional option that controls whether callsite
 // information is included in log output.
-func WithCaller(enable bool) Option {
+func WithCallsite(enable bool) Option {
 	return func(c config) config {
 		if c.mutex == nil {
 			c.mutex = &sync.RWMutex{}
@@ -366,7 +366,7 @@ func WithCaller(enable bool) Option {
 			defer c.mutex.Unlock()
 		}
 
-		c.caller = enable
+		c.callsite = enable
 
 		return c
 	}

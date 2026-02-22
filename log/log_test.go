@@ -16,8 +16,8 @@ func TestLogger_Make_DefaultConfiguration(t *testing.T) {
 	if logger.config.level != LevelInfo {
 		t.Errorf("expected default level Info, got %v", logger.config.level)
 	}
-	if logger.config.caller {
-		t.Error("expected caller disabled by default")
+	if logger.config.callsite {
+		t.Error("expected callsite disabled by default")
 	}
 	if logger.config.format != FormatJSON {
 		t.Errorf("expected default format JSON, got %v", logger.config.format)
@@ -74,23 +74,23 @@ func TestLogger_Make_WithTimeFormat_SetsLayout(t *testing.T) {
 	}
 }
 
-func TestLogger_Make_WithCaller_IncludesCallerInfo(t *testing.T) {
+func TestLogger_Make_WithCallsite_IncludesCallsiteInfo(t *testing.T) {
 	var buf bytes.Buffer
-	logger := Make(&buf, WithCaller(true))
+	logger := Make(&buf, WithCallsite(true))
 	logger.Info("test message")
 
 	output := buf.String()
 	if !strings.Contains(output, "source") {
-		t.Error("caller info not included when enabled")
+		t.Error("callsite info not included when enabled")
 	}
 
 	buf.Reset()
-	logger2 := Make(&buf, WithCaller(false))
+	logger2 := Make(&buf, WithCallsite(false))
 	logger2.Info("test message")
 
 	output = buf.String()
 	if strings.Contains(output, "source") {
-		t.Error("caller info included when disabled")
+		t.Error("callsite info included when disabled")
 	}
 }
 
@@ -215,7 +215,7 @@ func TestLogger_Make_MultipleOptions_AppliesAll(t *testing.T) {
 	logger := Make(&buf,
 		WithLevel(LevelDebug),
 		WithTimeLayout("RFC3339Nano"),
-		WithCaller(true),
+		WithCallsite(true),
 		WithFormat(FormatText))
 
 	logger.Debug("chained config test")
@@ -300,9 +300,9 @@ func BenchmarkLogger_Info(b *testing.B) {
 	}
 }
 
-func BenchmarkLogger_Info_WithCaller(b *testing.B) {
+func BenchmarkLogger_Info_WithCallsite(b *testing.B) {
 	var buf bytes.Buffer
-	logger := Make(&buf, WithCaller(true))
+	logger := Make(&buf, WithCallsite(true))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

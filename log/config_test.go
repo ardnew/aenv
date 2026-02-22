@@ -33,7 +33,7 @@ func TestConfig_WithLevel_SetsLevel(t *testing.T) {
 	}
 }
 
-func TestConfig_WithCaller_SetsEnableCaller(t *testing.T) {
+func TestConfig_WithCallsite_SetsEnableCallsite(t *testing.T) {
 	tests := []struct {
 		name     string
 		enable   bool
@@ -46,14 +46,14 @@ func TestConfig_WithCaller_SetsEnableCaller(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := config{}
-			opt := WithCaller(tt.enable)
+			opt := WithCallsite(tt.enable)
 			result := opt(c)
 
-			if result.caller != tt.expected {
+			if result.callsite != tt.expected {
 				t.Errorf(
-					"expected enableCaller %v, got %v",
+					"expected enableCallsite %v, got %v",
 					tt.expected,
-					result.caller,
+					result.callsite,
 				)
 			}
 		})
