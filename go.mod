@@ -14,7 +14,7 @@ require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/expr-lang/expr v1.17.7
+	github.com/expr-lang/expr v1.17.8
 	github.com/goccy/go-yaml v1.19.1
 	github.com/pkg/profile v1.7.0
 	github.com/sahilm/fuzzy v0.1.1
