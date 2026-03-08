@@ -1002,3 +1002,48 @@ func TestEvaluateExpr_LexicalScope_SeesAllNamespaces(t *testing.T) {
 		t.Errorf("expected %q, got %v", "localhost:8080", result)
 	}
 }
+
+func TestEvaluateNamespace_SelectiveEval_TransitiveDep(t *testing.T) {
+	input := `a : 1; b : a + 1; c : b + 1; unused : 999`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateNamespace(context.Background(), "c", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	switch v := result.(type) {
+	case int:
+		if v != 3 {
+			t.Errorf("expected 3, got %v", v)
+		}
+	case int64:
+		if v != 3 {
+			t.Errorf("expected 3, got %v", v)
+		}
+	default:
+		t.Errorf("expected int, got %T: %v", result, result)
+	}
+}
+
+func TestEvaluateNamespace_SelectiveEval_HyphenatedName(t *testing.T) {
+	input := `log-level : "debug"; config : log-level`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateNamespace(context.Background(), "config", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if result != "debug" {
+		t.Errorf("expected \"debug\", got %v", result)
+	}
+}
