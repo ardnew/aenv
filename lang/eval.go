@@ -215,11 +215,13 @@ func (a *AST) EvaluateNamespace(
 		}
 	}
 
-	logger.TraceContext(
-		ctx,
-		"param bindings",
-		slog.Any("params", sortedKeys(params)),
-	)
+	if logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
+		logger.TraceContext(
+			ctx,
+			"param bindings",
+			slog.Any("params", sortedKeys(params)),
+		)
+	}
 
 	ectx.params = params
 
@@ -272,11 +274,13 @@ func (a *AST) EvaluateExpr(
 	runtimeEnv := ectx.buildRuntimeEnv()
 	defer returnRuntimeEnv(runtimeEnv)
 
-	logger.TraceContext(
-		ctx,
-		"runtime env keys",
-		slog.Any("keys", sortedKeys(runtimeEnv)),
-	)
+	if logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
+		logger.TraceContext(
+			ctx,
+			"runtime env keys",
+			slog.Any("keys", sortedKeys(runtimeEnv)),
+		)
+	}
 
 	// Set up patchers
 	patcher := &hyphenPatcher{
@@ -374,12 +378,14 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	env := ctx.buildRuntimeEnv()
 	defer returnRuntimeEnv(env)
 
-	ctx.logger.TraceContext(
-		ctx.get(),
-		"eval expr",
-		slog.String("source", source),
-		slog.Any("env_keys", sortedKeys(env)),
-	)
+	if ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+		ctx.logger.TraceContext(
+			ctx.get(),
+			"eval expr",
+			slog.String("source", source),
+			slog.Any("env_keys", sortedKeys(env)),
+		)
+	}
 
 	// Set up patchers
 	patcher := &hyphenPatcher{
@@ -488,11 +494,13 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 		result[ns.Name] = evaluated
 	}
 
-	ctx.logger.TraceContext(
-		ctx.get(),
-		"block result",
-		slog.Any("scope_keys", sortedKeys(result)),
-	)
+	if ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+		ctx.logger.TraceContext(
+			ctx.get(),
+			"block result",
+			slog.Any("scope_keys", sortedKeys(result)),
+		)
+	}
 
 	return result, nil
 }
@@ -512,9 +520,8 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 		delete(env, k)
 	}
 
-	// Start with built-in environment (copy into pooled map)
-	builtins := makeEnvCache()
-	maps.Copy(env, builtins)
+	// Start with built-in environment (copy directly from singleton)
+	maps.Copy(env, builtinEnv())
 
 	// Add parameters first (they take precedence and shadow builtins)
 	maps.Copy(env, ctx.params)
@@ -973,15 +980,24 @@ func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 }
 
 // isFunction reports whether v is any callable Go value.
-// It uses reflection so that all function types — including builtin helpers
-// with concrete signatures (e.g. func() string) — are detected correctly,
-// not just the variadic func(...any)(any,error) used for user namespaces.
+// It uses a type-switch fast path for common types (~95% of cases) to avoid
+// reflection overhead. For user-defined namespaces with concrete signatures,
+// only the fallback reflection check will match.
 func isFunction(v any) bool {
-	if v == nil {
+	switch v.(type) {
+	case nil:
 		return false
+	case string, bool, int, int64, float64, uint, uint64:
+		return false
+	case []any, map[string]any:
+		return false
+	case *FuncRef:
+		return false
+	case func(...any) (any, error):
+		return true
+	default:
+		return reflect.TypeOf(v).Kind() == reflect.Func
 	}
-
-	return reflect.TypeOf(v).Kind() == reflect.Func
 }
 
 // funcRefSignature derives a human-readable call signature for a function

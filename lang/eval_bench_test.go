@@ -261,3 +261,49 @@ func BenchmarkSequentialEvaluations(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkBuildRuntimeEnv_CloneCost isolates env clone vs direct copy.
+func BenchmarkBuildRuntimeEnv_CloneCost(b *testing.B) {
+	config := `a : 1; b : 2; c : 3`
+	ast, err := ParseString(context.Background(), config)
+	if err != nil {
+		b.Fatalf("parse error: %v", err)
+	}
+
+	// Pre-warm
+	_, _ = ast.EvaluateNamespace(context.Background(), "a", nil)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, err := ast.EvaluateNamespace(context.Background(), "a", nil)
+		if err != nil {
+			b.Fatalf("eval error: %v", err)
+		}
+	}
+}
+
+// BenchmarkIsFunction measures reflection cost for type checking.
+func BenchmarkIsFunction(b *testing.B) {
+	values := []any{
+		"hello",
+		int64(42),
+		true,
+		3.14,
+		nil,
+		map[string]any{"a": 1},
+		[]any{1, 2, 3},
+		func() {},
+		func(x int) int { return x },
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		for _, v := range values {
+			_ = isFunction(v)
+		}
+	}
+}
