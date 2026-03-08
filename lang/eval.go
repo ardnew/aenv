@@ -142,6 +142,7 @@ func (a *AST) EvaluateNamespace(
 		processEnv: processEnv,
 		params:     make(map[string]any), // populated after validation below
 		logger:     logger,
+		resolved:   make(map[*Value]any),
 	}
 
 	// Find the target namespace in the merged list and establish its lexical
@@ -279,6 +280,7 @@ func (a *AST) EvaluateExpr(
 		processEnv: processEnv,
 		params:     make(map[string]any),
 		logger:     logger,
+		resolved:   make(map[*Value]any),
 	}
 
 	// Build runtime environment with actual resolved values
@@ -334,6 +336,7 @@ type evalContext struct {
 	params     map[string]any      // parameter bindings
 	logger     log.Logger          // structured logger
 	resolving  map[*Value]struct{} // cycle detection for resolveForEnv
+	resolved   map[*Value]any      // memoization for resolveForEnv
 	merged     []*Namespace        // cached merged top-level namespaces
 	visible    []*Namespace        // top-level namespaces in scope (nil = all merged)
 }
@@ -478,6 +481,7 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 			params:     entryParams,
 			logger:     ctx.logger,
 			resolving:  ctx.resolving,
+			resolved:   ctx.resolved,
 			merged:     ctx.merged,
 			visible:    ctx.visible, // inherit the outer top-level scope
 		}
@@ -579,6 +583,7 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 				params:     ctx.params,
 				logger:     ctx.logger,
 				resolving:  ctx.resolving,
+				resolved:   ctx.resolved,
 				merged:     ctx.merged,
 				visible:    defScope,
 			}
@@ -678,6 +683,7 @@ func (ctx *evalContext) makeNamespaceFunc(
 			params:     params,
 			logger:     ctx.logger,
 			resolving:  ctx.resolving,
+			resolved:   ctx.resolved,
 			merged:     ctx.merged,
 			visible:    defScope,
 		}
@@ -694,6 +700,10 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 		return nil
 	}
 
+	if cached, ok := ctx.resolved[v]; ok {
+		return cached
+	}
+
 	// Cycle detection
 	if ctx.resolving == nil {
 		ctx.resolving = make(map[*Value]struct{})
@@ -706,10 +716,12 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 	ctx.resolving[v] = struct{}{}
 	defer delete(ctx.resolving, v)
 
+	var result any
+
 	switch v.Kind {
 	case KindExpr:
 		// Try to evaluate the expression
-		result, err := ctx.evaluateValue(v)
+		evalResult, err := ctx.evaluateValue(v)
 		if err != nil {
 			ctx.logger.TraceContext(
 				ctx.get(),
@@ -721,11 +733,11 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 			return nil
 		}
 
-		return result
+		result = evalResult
 
 	case KindBlock:
 		// Resolve block to map
-		result, err := ctx.evaluateBlock(v)
+		evalResult, err := ctx.evaluateBlock(v)
 		if err != nil {
 			ctx.logger.TraceContext(
 				ctx.get(),
@@ -736,11 +748,14 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 			return nil
 		}
 
-		return result
+		result = evalResult
 
 	default:
 		return nil
 	}
+
+	ctx.resolved[v] = result
+	return result
 }
 
 // parseArgToAny converts a command-line argument string to a Go value.

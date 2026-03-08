@@ -381,3 +381,46 @@ func BenchmarkEvaluateNamespace_CompileCost(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkEvaluateNamespace_DiamondDeps(b *testing.B) {
+	tests := []struct {
+		name   string
+		config string
+		ns     string
+	}{
+		{
+			name:   "diamond_4",
+			config: `a : 1; b : a + 1; c : a + 2; sum : b + c`,
+			ns:     "sum",
+		},
+		{
+			name:   "fan_in_5",
+			config: `base : 10; x1 : base * 1; x2 : base * 2; x3 : base * 3; x4 : base * 4; total : x1 + x2 + x3 + x4`,
+			ns:     "total",
+		},
+	}
+
+	for _, tt := range tests {
+		b.Run(tt.name, func(b *testing.B) {
+			ast, err := ParseString(context.Background(), tt.config)
+			if err != nil {
+				b.Fatalf("parse error: %v", err)
+			}
+
+			_, err = ast.EvaluateNamespace(context.Background(), tt.ns, nil)
+			if err != nil {
+				b.Fatalf("warmup error: %v", err)
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				_, err := ast.EvaluateNamespace(context.Background(), tt.ns, nil)
+				if err != nil {
+					b.Fatalf("eval error: %v", err)
+				}
+			}
+		})
+	}
+}
