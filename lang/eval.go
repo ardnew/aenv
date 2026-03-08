@@ -120,11 +120,45 @@ func (a *AST) EvaluateNamespace(
 		slog.Int("arg_count", len(args)),
 	)
 
-	ns, found := a.GetNamespace(name)
-	if !found {
+	processEnv := buildProcessEnvMap(local.processEnv)
+
+	// Create evaluation context early to stabilise the cached merged namespace
+	// list. Using the same *Value pointers throughout ensures cycle detection
+	// works correctly across the entire evaluation chain.
+	ectx := &evalContext{
+		get:        func() context.Context { return ctx },
+		ast:        a,
+		processEnv: processEnv,
+		params:     make(map[string]any), // populated after validation below
+		logger:     logger,
+	}
+
+	// Find the target namespace in the merged list and establish its lexical
+	// scope. The namespace can see itself (visible is inclusive of position i),
+	// which enables self-recursion for parameterized namespaces while
+	// preventing forward references to later-defined namespaces.
+	merged := ectx.mergedNamespaces()
+
+	var (
+		ns      *Namespace
+		nsIndex int
+	)
+
+	for i, n := range merged {
+		if n.Name == name {
+			ns = n
+			nsIndex = i
+
+			break
+		}
+	}
+
+	if ns == nil {
 		return nil, ErrNotDefined.
 			With(slog.String("name", name))
 	}
+
+	ectx.visible = merged[:nsIndex+1]
 
 	// Check if namespace is parameterized
 	if len(ns.Params) == 0 && len(args) > 0 {
@@ -161,8 +195,6 @@ func (a *AST) EvaluateNamespace(
 			)
 	}
 
-	processEnv := buildProcessEnvMap(local.processEnv)
-
 	// Build parameter bindings map by parsing each argument as an expression.
 	// For variadic namespaces, the last parameter collects all remaining
 	// arguments into a slice.
@@ -189,14 +221,7 @@ func (a *AST) EvaluateNamespace(
 		slog.Any("params", sortedKeys(params)),
 	)
 
-	// Build evaluation context
-	ectx := &evalContext{
-		get:        func() context.Context { return ctx },
-		ast:        a,
-		processEnv: processEnv,
-		params:     params,
-		logger:     logger,
-	}
+	ectx.params = params
 
 	return ectx.evaluateValue(ns.Value)
 }
@@ -255,7 +280,7 @@ func (a *AST) EvaluateExpr(
 
 	// Set up patchers
 	patcher := &hyphenPatcher{
-		namespaces: a.Namespaces,
+		namespaces: ectx.mergedNamespaces(),
 		env:        runtimeEnv,
 		logger:     logger,
 	}
@@ -294,6 +319,20 @@ type evalContext struct {
 	params     map[string]any      // parameter bindings
 	logger     log.Logger          // structured logger
 	resolving  map[*Value]struct{} // cycle detection for resolveForEnv
+	merged     []*Namespace        // cached merged top-level namespaces
+	visible    []*Namespace        // top-level namespaces in scope (nil = all merged)
+}
+
+// mergedNamespaces returns the deduplicated/merged top-level namespaces,
+// computing and caching the result on first call. Caching is essential:
+// mergeEntries creates new *Value pointers for merged blocks, and reusing
+// the same pointers lets the cycle detection in resolveForEnv work correctly.
+func (ctx *evalContext) mergedNamespaces() []*Namespace {
+	if ctx.merged == nil {
+		ctx.merged = mergeEntries(ctx.ast.Namespaces)
+	}
+
+	return ctx.merged
 }
 
 // evaluateValue recursively evaluates a Value to its Go representation.
@@ -344,12 +383,27 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 
 	// Set up patchers
 	patcher := &hyphenPatcher{
-		namespaces: ctx.ast.Namespaces,
+		namespaces: ctx.mergedNamespaces(),
 		env:        env,
 		logger:     ctx.logger,
 	}
 
-	program, err := compileExpr(source, env, expr.Patch(patcher))
+	// When evaluating with a lexically restricted scope (visible != nil),
+	// bypass the program cache: a cached program compiled with a broader env
+	// could silently succeed even when a forward-reference variable is absent,
+	// defeating the forward-reference error. Recompiling against the current
+	// env ensures the type-checker catches any out-of-scope identifiers.
+	var (
+		program *vm.Program
+		err     error
+	)
+
+	if ctx.visible != nil {
+		program, err = expr.Compile(source, expr.Env(env), expr.Patch(patcher))
+	} else {
+		program, err = compileExpr(source, env, expr.Patch(patcher))
+	}
+
 	if err != nil {
 		return nil, ErrExprCompile.Wrap(err).
 			With(slog.String("source", source))
@@ -376,7 +430,9 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 }
 
 // evaluateBlock evaluates a block value to a map[string]any.
-// The block's namespace entries can reference each other (sibling scope).
+// Entries are evaluated sequentially in definition order. Each entry can only
+// reference siblings defined before it (lexical scope) — forward references
+// within the block produce a compilation error.
 func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 	if v.Entries == nil {
 		return make(map[string]any), nil
@@ -388,47 +444,55 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 		slog.Int("entry_count", len(v.Entries)),
 	)
 
-	// Create a child context with the block's namespace scope.
-	// This allows expressions within the block to reference sibling namespaces.
-	childCtx := &evalContext{
-		get:        ctx.get,
-		ast:        ctx.ast,
-		processEnv: ctx.processEnv,
-		params:     make(map[string]any),
-		logger:     ctx.logger,
-		resolving:  ctx.resolving,
-	}
+	// Merge duplicates within the block (block+block → recursive merge,
+	// others → last definition wins), preserving first-occurrence order.
+	merged := mergeEntries(v.Entries)
 
-	// Copy parent params
-	maps.Copy(childCtx.params, ctx.params)
+	result := make(map[string]any, len(merged))
 
-	// Add block-scoped namespaces to child context as parameters.
-	// This enables sibling references like: { x : 1; y : x + 1 }
-	// Only add non-parameterized namespaces to avoid circular evaluation.
-	for _, ns := range v.Entries {
-		if len(ns.Params) == 0 {
-			// Add as a resolvable parameter
-			childCtx.params[ns.Name] = childCtx.resolveForEnv(ns.Value)
+	for _, ns := range merged {
+		// Build an entry context that inherits the outer scope and all sibling
+		// results evaluated so far. Later siblings are intentionally absent,
+		// enforcing lexical (sequential) scope within the block.
+		entryParams := make(map[string]any, len(ctx.params)+len(result))
+		maps.Copy(
+			entryParams,
+			ctx.params,
+		) // outer params (e.g., from EvaluateNamespace)
+		maps.Copy(entryParams, result) // siblings evaluated so far
+
+		entryCtx := &evalContext{
+			get:        ctx.get,
+			ast:        ctx.ast,
+			processEnv: ctx.processEnv,
+			params:     entryParams,
+			logger:     ctx.logger,
+			resolving:  ctx.resolving,
+			merged:     ctx.merged,
+			visible:    ctx.visible, // inherit the outer top-level scope
 		}
-	}
 
-	ctx.logger.TraceContext(
-		ctx.get(),
-		"block scope",
-		slog.Any("scope_keys", sortedKeys(childCtx.params)),
-	)
+		if len(ns.Params) > 0 {
+			// Parameterized block entry: expose as a callable in the result.
+			// The function body evaluates with the outer top-level scope.
+			result[ns.Name] = entryCtx.makeNamespaceFunc(ns, ctx.visible)
 
-	// Evaluate all namespaces with the enriched context
-	result := make(map[string]any, len(v.Entries))
+			continue
+		}
 
-	for _, ns := range v.Entries {
-		evaluated, err := childCtx.evaluateValue(ns.Value)
+		evaluated, err := entryCtx.evaluateValue(ns.Value)
 		if err != nil {
 			return nil, err
 		}
 
 		result[ns.Name] = evaluated
 	}
+
+	ctx.logger.TraceContext(
+		ctx.get(),
+		"block result",
+		slog.Any("scope_keys", sortedKeys(result)),
+	)
 
 	return result, nil
 }
@@ -455,26 +519,59 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 	// Add parameters first (they take precedence and shadow builtins)
 	maps.Copy(env, ctx.params)
 
-	// Add top-level namespaces from the AST.
-	// For non-parameterized namespaces, we try to resolve their values.
-	// For parameterized namespaces, we add them as callable functions.
-	// Namespace patching will optimize constant-valued namespaces.
-	resolved := make(map[string]any)
+	// Determine which top-level namespaces are in scope.
+	// When visible is nil (e.g., EvaluateExpr / REPL), all merged namespaces
+	// are visible. Otherwise only the prefix slice up to and including the
+	// target namespace is considered (lexical scope: each namespace sees only
+	// those defined before it, plus itself for self-recursion).
+	merged := ctx.mergedNamespaces()
 
-	for _, ns := range ctx.ast.Namespaces {
+	effective := ctx.visible
+	if effective == nil {
+		effective = merged
+	}
+
+	// Add in-scope top-level namespaces from the AST.
+	// Merge duplicate definitions: block+block namespaces have their entries
+	// merged recursively (later entries shadow earlier ones by name);
+	// non-block duplicates use last-definition-wins.
+	for j, ns := range effective {
 		// Skip if already in env (shadowed by params)
 		if _, exists := env[ns.Name]; exists {
 			continue
 		}
 
+		// When a lexical scope is active (visible != nil), each namespace's
+		// definition-point scope is the prefix of the full merged list up to
+		// and including its own position. This enables self-recursion while
+		// preventing forward references.
+		//
+		// When visible is nil (EvaluateExpr / REPL mode) no scoping is
+		// applied: defScope stays nil, which resolveForEnv / makeNamespaceFunc
+		// interpret as "full scope" — all namespaces visible.
+		var defScope []*Namespace
+		if ctx.visible != nil {
+			defScope = merged[:j+1]
+		}
+
 		if len(ns.Params) > 0 {
-			// Parameterized namespace: add as callable function
-			env[ns.Name] = ctx.makeNamespaceFunc(ns)
+			// Parameterized namespace: add as callable function.
+			env[ns.Name] = ctx.makeNamespaceFunc(ns, defScope)
 		} else {
-			// Non-parameterized: resolve value for patching
-			val := ctx.resolveForEnv(ns.Value)
-			env[ns.Name] = val
-			resolved[ns.Name] = val
+			// Non-parameterized: resolve using its definition-point scope so
+			// that forward references within the body produce an error (when
+			// lexical scope is active) or succeed (REPL mode).
+			resolveCtx := &evalContext{
+				get:        ctx.get,
+				ast:        ctx.ast,
+				processEnv: ctx.processEnv,
+				params:     ctx.params,
+				logger:     ctx.logger,
+				resolving:  ctx.resolving,
+				merged:     ctx.merged,
+				visible:    defScope,
+			}
+			env[ns.Name] = resolveCtx.resolveForEnv(ns.Value)
 		}
 	}
 
@@ -504,8 +601,11 @@ func returnRuntimeEnv(env map[string]any) {
 
 // makeNamespaceFunc creates a callable function for a parameterized namespace.
 // This allows parameterized namespaces to be called from within expressions.
+// defScope is the set of top-level namespaces visible at the namespace's
+// definition point; the function body evaluates with that scope.
 func (ctx *evalContext) makeNamespaceFunc(
 	ns *Namespace,
+	defScope []*Namespace,
 ) func(...any) (any, error) {
 	return func(args ...any) (any, error) {
 		ctx.logger.TraceContext(
@@ -556,7 +656,10 @@ func (ctx *evalContext) makeNamespaceFunc(
 			}
 		}
 
-		// Create a child evalContext with parameter bindings
+		// Create a child evalContext with parameter bindings.
+		// visible is set to defScope (the namespace's definition-point scope).
+		// When defScope is nil (EvaluateExpr / REPL mode), visible is also nil,
+		// which means the function body evaluates with unrestricted scope.
 		childCtx := &evalContext{
 			get:        ctx.get,
 			ast:        ctx.ast,
@@ -564,6 +667,8 @@ func (ctx *evalContext) makeNamespaceFunc(
 			params:     params,
 			logger:     ctx.logger,
 			resolving:  ctx.resolving,
+			merged:     ctx.merged,
+			visible:    defScope,
 		}
 
 		return childCtx.evaluateValue(ns.Value)

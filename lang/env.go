@@ -43,29 +43,18 @@ func makeEnvCache() map[string]any {
 			"user":     getUser(),
 			"shell":    getShell(),
 
-			// Working directory.
-			"cwd": getCwd,
-
-			// Filesystem functions.
-			"file": map[string]any{
-				"exists":    fileExists,
-				"isDir":     fileIsDir,
-				"isRegular": fileIsRegular,
-				"isSymlink": fileIsSymlink,
-			},
-
-			// Path manipulation functions.
-			"path": map[string]any{
-				"abs": pathAbs,
-				"cat": pathCat,
-				"rel": pathRel,
+			// Filesystem functions
+			"fs": map[string]any{
+				"cwd":  fsCwd,
+				"abs":  fsAbs,
+				"cat":  fsCat,
+				"rel":  fsRel,
+				"stat": fsStat,
 			},
 
 			// PATH-like string manipulation via mung.
-			"mung": map[string]any{
-				"prefix":   mungPrefix,
-				"prefixif": mungPrefixIf,
-			},
+			"mung":   mungPrefix,
+			"mungif": mungPrefixIf,
 		}
 	})
 
@@ -156,8 +145,8 @@ func BuiltinEnvLookup(path string) []string {
 // Leaving the conventions unspecified allows this type to be used
 // in a variety of contexts.
 type target struct {
-	OS   string
-	Arch string
+	OS   string `expr:"os"`
+	Arch string `expr:"arch"`
 }
 
 // getTarget returns the host target using GNU GCC/LLVM naming conventions.
@@ -267,60 +256,19 @@ func getShell() string {
 }
 
 // ---------------------------------------------------------------------------
-// Working directory
+// Path manipulation functions
 // ---------------------------------------------------------------------------
 
-func getCwd() string {
+func fsCwd() string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return pathAbs(".")
+		return fsAbs(".")
 	}
 
 	return cwd
 }
 
-// ---------------------------------------------------------------------------
-// Filesystem functions
-// ---------------------------------------------------------------------------
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-
-	return !os.IsNotExist(err)
-}
-
-func fileIsDir(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.IsDir()
-}
-
-func fileIsRegular(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.Mode().IsRegular()
-}
-
-func fileIsSymlink(path string) bool {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.Mode()&os.ModeSymlink != 0
-}
-
-// ---------------------------------------------------------------------------
-// Path manipulation functions
-// ---------------------------------------------------------------------------
-
-func pathAbs(path string) string {
+func fsAbs(path string) string {
 	p, err := filepath.Abs(path)
 	if err != nil {
 		return path
@@ -329,41 +277,83 @@ func pathAbs(path string) string {
 	return p
 }
 
-func pathCat(elem ...string) string {
+func fsCat(elem ...string) string {
 	return filepath.Join(elem...)
 }
 
-func pathRel(from, to string) string {
-	p, err := filepath.Rel(pathAbs(from), pathAbs(to))
+func fsRel(from, to string) string {
+	p, err := filepath.Rel(fsAbs(from), fsAbs(to))
 	if err != nil {
-		return pathCat(from, to)
+		return fsCat(from, to)
 	}
 
 	return p
+}
+
+func fsStat(path string) map[string]any {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil
+	}
+
+	return map[string]any{
+		"name":  info.Name(),
+		"size":  info.Size(),
+		"mode":  info.Mode().Perm(),
+		"perms": info.Mode().String(),
+		"mtime": info.ModTime().String(),
+		"type": map[string]bool{
+			"regular":   info.Mode().IsRegular(),
+			"dir":       info.Mode()&os.ModeDir != 0,
+			"append":    info.Mode()&os.ModeAppend != 0,
+			"exclusive": info.Mode()&os.ModeExclusive != 0,
+			"temporary": info.Mode()&os.ModeTemporary != 0,
+			"symlink":   info.Mode()&os.ModeSymlink != 0,
+			"device":    info.Mode()&os.ModeDevice != 0,
+			"pipe":      info.Mode()&os.ModeNamedPipe != 0,
+			"socket":    info.Mode()&os.ModeSocket != 0,
+			"setuid":    info.Mode()&os.ModeSetuid != 0,
+			"setgid":    info.Mode()&os.ModeSetgid != 0,
+			"char":      info.Mode()&os.ModeCharDevice != 0,
+			"sticky":    info.Mode()&os.ModeSticky != 0,
+			"irregular": info.Mode()&os.ModeIrregular != 0,
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
 // PATH-like string manipulation (mung)
 // ---------------------------------------------------------------------------
 
-func mungPrefix(key string, prefix ...string) string {
+func mungPrefix(key, sep string, prefix ...string) string {
 	return mung.Make(
 		mung.WithSubjectItems(key),
-		mung.WithDelim(string(os.PathListSeparator)),
+		mung.WithDelim(sep),
 		mung.WithPrefixItems(prefix...),
 	).String()
 }
 
 func mungPrefixIf(
-	key string,
-	predicate func(string) bool,
+	key, sep string,
+	predicate func(...any) (any, error),
 	prefix ...string,
 ) string {
+	test := func(s string) bool {
+		result, err := predicate(s)
+		if err != nil {
+			return false
+		}
+
+		b, ok := result.(bool)
+
+		return ok && b
+	}
+
 	return mung.Make(
 		mung.WithSubjectItems(key),
-		mung.WithDelim(string(os.PathListSeparator)),
+		mung.WithDelim(sep),
 		mung.WithPrefixItems(prefix...),
-		mung.WithFilter(predicate),
+		mung.WithFilter(test),
 	).String()
 }
 

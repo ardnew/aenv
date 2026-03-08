@@ -139,6 +139,27 @@ func (a *AST) All() iter.Seq[*Namespace] {
 	}
 }
 
+// RemoveNamespace removes all namespaces with the given name from the AST.
+// It returns true if at least one namespace was removed.
+func (a *AST) RemoveNamespace(name string) bool {
+	filtered := a.Namespaces[:0]
+
+	for _, ns := range a.Namespaces {
+		if ns.Name != name {
+			filtered = append(filtered, ns)
+		}
+	}
+
+	removed := len(filtered) != len(a.Namespaces)
+	a.Namespaces = filtered
+
+	if removed && a.index != nil {
+		delete(a.index, name)
+	}
+
+	return removed
+}
+
 // DefineNamespace adds or replaces a namespace in the AST.
 func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 	ns := &Namespace{
@@ -180,4 +201,90 @@ func (a *AST) buildIndex() {
 	for _, ns := range a.Namespaces {
 		a.index[ns.Name] = ns
 	}
+}
+
+// resolvedNamespace returns the effective namespace definition for the given
+// name by merging all block definitions. When multiple definitions exist and
+// all have block values, their entries are merged recursively (later entries
+// shadow earlier ones by name). Otherwise the last definition wins entirely.
+func (a *AST) resolvedNamespace(name string) (*Namespace, bool) {
+	var defs []*Namespace
+
+	for _, ns := range a.Namespaces {
+		if ns.Name == name {
+			defs = append(defs, ns)
+		}
+	}
+
+	if len(defs) == 0 {
+		return nil, false
+	}
+
+	if len(defs) == 1 {
+		return defs[0], true
+	}
+
+	merged := mergeEntries(defs)
+	if len(merged) != 1 {
+		// All share the same name, so mergeEntries produces exactly one.
+		return defs[len(defs)-1], true
+	}
+
+	return merged[0], true
+}
+
+// mergeEntries takes a list of namespace entries that may contain duplicate
+// names and returns a deduplicated list. The order of first occurrence is
+// preserved. When two entries share a name:
+//   - If both have block values, their entries are merged recursively.
+//   - Otherwise the later definition replaces the earlier one entirely.
+func mergeEntries(entries []*Namespace) []*Namespace {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	entryMap := make(map[string]*Namespace, len(entries))
+	order := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		existing, seen := entryMap[entry.Name]
+		if !seen {
+			entryMap[entry.Name] = entry
+			order = append(order, entry.Name)
+
+			continue
+		}
+
+		// Both blocks: merge entries recursively.
+		if existing.Value != nil && existing.Value.Kind == KindBlock &&
+			entry.Value != nil && entry.Value.Kind == KindBlock {
+			combined := make([]*Namespace, 0,
+				len(existing.Value.Entries)+len(entry.Value.Entries))
+			combined = append(combined, existing.Value.Entries...)
+			combined = append(combined, entry.Value.Entries...)
+
+			entryMap[entry.Name] = &Namespace{
+				Name:   entry.Name,
+				Params: entry.Params,
+				Value: &Value{
+					Kind:    KindBlock,
+					Entries: mergeEntries(combined),
+					Pos:     entry.Value.Pos,
+				},
+				Pos: entry.Pos,
+			}
+
+			continue
+		}
+
+		// Non-block or mixed: last definition wins.
+		entryMap[entry.Name] = entry
+	}
+
+	result := make([]*Namespace, 0, len(order))
+	for _, name := range order {
+		result = append(result, entryMap[name])
+	}
+
+	return result
 }
