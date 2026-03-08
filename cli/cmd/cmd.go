@@ -28,9 +28,9 @@ func kongContextFrom(ctx context.Context) *kong.Context {
 }
 
 type (
-	sourceFilesKey         struct{}
-	explicitSourceFilesKey struct{}
-	sourceFiles            struct {
+	sourceFilesKey    struct{}
+	hasUserSourcesKey struct{}
+	sourceFiles       struct {
 		read     []io.Reader
 		hasStdin bool
 	}
@@ -98,18 +98,10 @@ func WithSourceFiles(ctx context.Context, sources []string) context.Context {
 	return context.WithValue(ctx, sourceFilesKey{}, buildSourceFiles(sources))
 }
 
-// WithExplicitSourceFiles returns a new context.Context containing an
-// [io.Reader] for only the explicitly specified source files (excluding any
-// implicitly included files such as the config file).
-func WithExplicitSourceFiles(
-	ctx context.Context,
-	sources []string,
-) context.Context {
-	return context.WithValue(
-		ctx,
-		explicitSourceFilesKey{},
-		buildSourceFiles(sources),
-	)
+// WithHasUserSources stores whether the user provided any explicit source files
+// via -f flags or stdin.
+func WithHasUserSources(ctx context.Context, has bool) context.Context {
+	return context.WithValue(ctx, hasUserSourcesKey{}, has)
 }
 
 // buildSourceFiles constructs a SourceFiles from the given source paths.
@@ -218,10 +210,15 @@ func sourceFilesFrom(ctx context.Context) SourceFiles {
 	return r
 }
 
-// explicitSourceFilesFrom retrieves the io.Reader stored in ctx by
-// WithExplicitSourceFiles. Returns nil if no reader was stored.
-func explicitSourceFilesFrom(ctx context.Context) SourceFiles {
-	r, _ := ctx.Value(explicitSourceFilesKey{}).(SourceFiles)
+// hasUserSourcesFrom reports whether the user provided any explicit source
+// files via -f flags or stdin.
+func hasUserSourcesFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(hasUserSourcesKey{}).(bool)
 
-	return r
+	return v
+}
+
+// stdinSourceFiles returns a SourceFiles that reads only from stdin.
+func stdinSourceFiles() SourceFiles {
+	return &sourceFiles{hasStdin: true}
 }

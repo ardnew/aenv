@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/alecthomas/kong"
 
 	"github.com/ardnew/aenv/lang"
+	"github.com/ardnew/aenv/log"
 )
 
 // Load is a [kong.ConfigurationLoader] that parses config files written in
@@ -52,7 +54,12 @@ func resolve(
 		// Parse the config file (cached after first parse)
 		ast, err := lang.ParseReader(ctx, r)
 		if err != nil {
-			// Parse error - return empty config
+			// Parse error - warn and return empty config
+			log.WarnContext(ctx,
+				"config file has parse errors, using defaults",
+				slog.String("error", err.Error()),
+			)
+
 			return config{}, nil
 		}
 

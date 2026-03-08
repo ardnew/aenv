@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/ardnew/aenv/cli/cmd/repl"
+	"github.com/ardnew/aenv/lang"
 	"github.com/ardnew/aenv/log"
 )
 
@@ -24,7 +26,7 @@ func (e *Eval) Run(ctx context.Context) (err error) {
 
 	cacheDir, ok := ktx.Model.Vars()[CacheIdentifier]
 	if !ok {
-		panic("internal error: unresolved cache directory")
+		return ErrMissingCacheDir
 	}
 
 	logger := log.With(slog.String("cmd", "eval"))
@@ -35,36 +37,36 @@ func (e *Eval) Run(ctx context.Context) (err error) {
 		slog.Int("arg_count", len(e.Args)),
 	)
 
-	return repl.Run(ctx, sourceFilesFrom(ctx), cacheDir, logger)
-}
+	if e.Name == "" {
+		return repl.Run(ctx, sourceFilesFrom(ctx), cacheDir, logger)
+	}
 
-//	// Require name for single evaluation
-//	if e.Name == "" {
-//		return NewError("namespace name required")
-//	}
-//
-//	// Parse with expression compilation enabled
-//	ast, err := lang.ParseReader(
-//		reader,
-//		lang.WithCompileExprs(true),
-//	)
-//	if err != nil {
-//		return lang.WrapError(err).
-//			With(slog.String("command", "eval"))
-//	}
-//
-//	// Evaluate the namespace
-//	result, err := ast.EvaluateNamespace(e.Name, e.Args)
-//	if err != nil {
-//		return lang.WrapError(err).
-//			With(
-//				slog.String("command", "eval"),
-//				slog.String("namespace", e.Name),
-//			)
-//	}
-//
-//	// Print result in native format
-//	fmt.Println(lang.FormatResult(result))
-//
-//	return nil
-//}
+	reader := sourceFilesFrom(ctx)
+	if reader == nil {
+		return ErrNoSource.With(slog.String("hint", "use -f PATH or - for stdin"))
+	}
+
+	ast, err := lang.ParseReader(
+		ctx,
+		reader,
+		// lang.WithLogger(logger),
+	)
+	if err != nil {
+		return lang.WrapError(err).
+			With(slog.String("command", "eval"))
+	}
+
+	result, err := ast.EvaluateNamespace(ctx, e.Name, e.Args)
+	if err != nil {
+		return lang.WrapError(err).
+			With(
+				slog.String("command", "eval"),
+				slog.String("namespace", e.Name),
+			)
+	}
+
+	// Print result in native format
+	fmt.Println(lang.FormatResult(result))
+
+	return nil
+}

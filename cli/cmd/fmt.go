@@ -6,35 +6,38 @@ import (
 	"os"
 
 	"github.com/ardnew/aenv/lang"
+	"github.com/ardnew/aenv/log"
 )
 
 // Fmt reads input from stdin, parses it, and formats it in the chosen format.
 type Fmt struct {
-	Native Native `cmd:"" default:"withargs" help:"Format as native aenv syntax (default)"`
-	JSON   JSON   `cmd:""                    help:"Format as JSON"`
-	YAML   YAML   `cmd:""                    help:"Format as YAML"`
-	AST    AST    `cmd:""                    help:"Format as abstract syntax tree"`
+	Default Default `cmd:"" default:"withargs" help:"Format as native aenv syntax (default)"`
+	JSON    JSON    `cmd:""                    help:"Format as JSON"`
+	YAML    YAML    `cmd:""                    help:"Format as YAML"`
+	AST     AST     `cmd:""                    help:"Format as abstract syntax tree"`
 }
 
-// Native formats input as native aenv syntax.
-type Native struct {
+// Default formats input as native aenv syntax.
+type Default struct {
 	Indent int `default:"2" help:"Indent width for formatted output" short:"i"`
 }
 
 // Run executes the fmt command.
-func (f *Native) Run(ctx context.Context) error {
-	reader := explicitSourceFilesFrom(ctx)
+func (d *Default) Run(ctx context.Context) error {
+	reader := fmtSourceFiles(ctx)
 	if reader == nil {
-		return NewError("require source files")
+		return ErrNoSource.With(slog.String("hint", "use -f PATH or - for stdin"))
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
 	if err != nil {
 		return lang.WrapError(err).
-			With(slog.String("format", "native"))
+			With(slog.String("format", "default"))
 	}
 
-	return ast.Format(ctx, os.Stdout, f.Indent)
+	stripConfigNamespace(ast)
+
+	return ast.Format(ctx, os.Stdout, d.Indent)
 }
 
 // JSON reads input from stdin, parses it, and outputs as JSON.
@@ -44,9 +47,9 @@ type JSON struct {
 
 // Run executes the json command.
 func (j *JSON) Run(ctx context.Context) error {
-	reader := explicitSourceFilesFrom(ctx)
+	reader := fmtSourceFiles(ctx)
 	if reader == nil {
-		return NewError("require source files")
+		return ErrNoSource.With(slog.String("hint", "use -f PATH or - for stdin"))
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -54,6 +57,8 @@ func (j *JSON) Run(ctx context.Context) error {
 		return lang.WrapError(err).
 			With(slog.String("format", "json"))
 	}
+
+	stripConfigNamespace(ast)
 
 	return ast.FormatJSON(ctx, os.Stdout, j.Indent)
 }
@@ -65,9 +70,9 @@ type YAML struct {
 
 // Run executes the yaml command.
 func (y *YAML) Run(ctx context.Context) error {
-	reader := explicitSourceFilesFrom(ctx)
+	reader := fmtSourceFiles(ctx)
 	if reader == nil {
-		return NewError("require source files")
+		return ErrNoSource.With(slog.String("hint", "use -f PATH"))
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -75,6 +80,8 @@ func (y *YAML) Run(ctx context.Context) error {
 		return lang.WrapError(err).
 			With(slog.String("format", "yaml"))
 	}
+
+	stripConfigNamespace(ast)
 
 	return ast.FormatYAML(ctx, os.Stdout, y.Indent)
 }
@@ -84,9 +91,9 @@ type AST struct{}
 
 // Run executes the ast command.
 func (a *AST) Run(ctx context.Context) error {
-	reader := explicitSourceFilesFrom(ctx)
+	reader := fmtSourceFiles(ctx)
 	if reader == nil {
-		return NewError("require source files")
+		return ErrNoSource.With(slog.String("hint", "use -f PATH"))
 	}
 
 	ast, err := lang.ParseReader(ctx, reader)
@@ -95,8 +102,31 @@ func (a *AST) Run(ctx context.Context) error {
 			With(slog.String("format", "ast"))
 	}
 
+	stripConfigNamespace(ast)
+
 	// Print the AST to stdout
 	ast.Print(ctx, os.Stdout)
 
 	return nil
+}
+
+// fmtSourceFiles returns the source files reader for fmt subcommands.
+// If the user did not provide any explicit -f flags, stdin is used as the
+// default source.
+func fmtSourceFiles(ctx context.Context) SourceFiles {
+	if !hasUserSourcesFrom(ctx) {
+		return stdinSourceFiles()
+	}
+
+	return sourceFilesFrom(ctx)
+}
+
+// stripConfigNamespace removes the config namespace from the AST unless the
+// current log level is debug or trace.
+func stripConfigNamespace(ast *lang.AST) {
+	if log.CurrentLevel() <= log.LevelDebug {
+		return
+	}
+
+	ast.RemoveNamespace(ConfigIdentifier)
 }

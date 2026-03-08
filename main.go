@@ -2,20 +2,21 @@ package main
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"os"
 
 	"github.com/ardnew/aenv/cli"
-	"github.com/ardnew/aenv/log"
 )
 
 func main() {
 	err := cli.Run(context.Background(), os.Exit, os.Args[1:]...)
 	if err != nil {
-		log.Error(
-			"run failed",
-			slog.Any("error", err),
-		) // slog automatically uses LogValue()
+		if werr, ok := err.(interface{ Unwrap() error }); ok {
+			err = werr.Unwrap()
+		}
+
+		fmt.Fprintln(os.Stderr, "error:", err)
+
 		os.Exit(1)
 	}
 }

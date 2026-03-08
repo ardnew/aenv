@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 
 	"github.com/alecthomas/kong"
 
@@ -11,15 +12,16 @@ import (
 
 // CLI is the top-level command-line interface for aenv.
 type CLI struct {
-	Log   logConfig   `embed:"" group:"log"   prefix:"log-"`
-	Pprof pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
+	Log   logConfig        `embed:"" group:"log"   prefix:"log-"`
+	Pprof pprofConfig      `embed:"" group:"pprof" prefix:"pprof-"`
+	Ver   kong.VersionFlag `                                       hidden:""`
 
-	Source []string `help:"Include source file(s) ('-' for stdin)" placeholder:"PATH" short:"s" type:"existingfile"`
+	Source []string `help:"Include source file(s) ('-' for stdin)" name:"file" placeholder:"PATH" short:"f" type:"existingfile"`
 
-	Init cmd.Init `cmd:"" help:"Initialize configuration file"`
-	Fmt  cmd.Fmt  `cmd:"" help:"Format namespaces"`
-
-	Eval cmd.Eval `cmd:"" default:"withargs" help:"Evaluate namespaces"`
+	Init    cmd.Init    `cmd:"" help:"Initialize configuration file"`
+	Fmt     cmd.Fmt     `cmd:"" help:"Format source files"`
+	Eval    cmd.Eval    `cmd:"" help:"Evaluate configuration and print results" default:"withargs"`
+	Version cmd.Version `cmd:"" help:"Print version information"`
 }
 
 // Run executes the aenv CLI with the given context and arguments.
@@ -39,8 +41,9 @@ func Run(
 	configFilePath := configPath(baseConfig)
 
 	vars := kong.Vars{
-		cmd.ConfigIdentifier: configFilePath,
-		cmd.CacheIdentifier:  cacheDir(),
+		cmd.ConfigIdentifier:  configFilePath,
+		cmd.CacheIdentifier:   cacheDir(),
+		cmd.VersionIdentifier: strings.TrimSpace(pkg.Version),
 	}.
 		CloneWith(cli.Log.vars()).
 		CloneWith(cli.Pprof.vars())
@@ -92,14 +95,12 @@ func Run(
 	// Stuff additional context values for use by commands
 	ctx = cmd.WithContext(ctx, ktx)
 	// Always include the aenv config file as the first source so its
-	// environment is available in every eval and REPL session.
+	// environment is available to all subcommands.
 	ctx = cmd.WithSourceFiles(
 		ctx,
 		append([]string{configFilePath}, cli.Source...),
 	)
-	// Store only the user-specified sources for commands like fmt that
-	// should not include the implicitly added config file.
-	ctx = cmd.WithExplicitSourceFiles(ctx, cli.Source)
+	ctx = cmd.WithHasUserSources(ctx, len(cli.Source) > 0)
 
 	// Finalize logger configuration with all parsed values including
 	// TimeLayout and Caller which don't use TextUnmarshaler.

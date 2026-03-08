@@ -45,13 +45,14 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 var DefaultLogOutput = os.Stderr
 
 type logConfig struct {
-	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"`
-	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format (${enum})"`
-	Output     logOutput `                                          help:"Log output file(s) ('-' for stdout)" placeholder:"PATH" short:"o" type:"path"`
+	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"                       short:"g"`
+	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format (${enum})"                      short:"a"`
+	Output     logOutput `                                          help:"Log output file(s) ('-' for stdout)"           short:"o" placeholder:"PATH" type:"path"`
 	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
-	Callsite   bool      `default:"false"                           help:"Include callsite information"                                                    negatable:""`
-	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"                                                negatable:""`
-	Verbose    int       `                                          help:"Increment log verbosity"                                short:"v" type:"counter"`
+	Callsite   bool      `default:"false"                           help:"Include callsite information"                  short:"c"                                   negatable:""`
+	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"              short:"p"                                   negatable:""`
+	Verbose    int       `                                          help:"Increment log verbosity (-v=debug, -vv=trace)" short:"v"                    type:"counter"`
+	Quiet      bool      `default:"false"                           help:"Suppress all output except errors"             short:"q"`
 }
 
 func (*logConfig) vars() kong.Vars {
@@ -155,7 +156,7 @@ func (f *logConfig) start(ctx context.Context) func() {
 		logAttrs = append(logAttrs, slog.String("output", str))
 	}
 
-	log.DebugContext(ctx, "logger initialized", logAttrs...)
+	log.TraceContext(ctx, "logger initialized", logAttrs...)
 
 	// Return cleanup function that closes the log file
 	return func() {
@@ -193,8 +194,10 @@ func (f *logConfig) scan(args []string) {
 		callsite   = fs.Bool("log-callsite", false, "")
 		noCallsite = fs.Bool("no-log-callsite", false, "")
 		verbose    = fs.Int("log-verbose", 0, "")
+		quiet      = fs.Bool("log-quiet", false, "")
 	)
-	fs.IntVar(verbose, "v", 0, "") // Short form alias
+	fs.IntVar(verbose, "v", 0, "")    // Short form alias
+	fs.BoolVar(quiet, "q", false, "") // Short form alias
 
 	var output logOutput
 	fs.Var(&output, "log-output", "")
@@ -209,6 +212,7 @@ func (f *logConfig) scan(args []string) {
 		isLongLog := strings.HasPrefix(arg, "--log-") ||
 			strings.HasPrefix(arg, "--no-log-")
 		isShortOutput := arg == "-o" || strings.HasPrefix(arg, "-o=")
+		isQuiet := arg == "-q" || arg == "--log-quiet"
 
 		// Check for -v flags (can be stacked like -vv or -vvv)
 		isVerbose := false
@@ -234,7 +238,7 @@ func (f *logConfig) scan(args []string) {
 			}
 		}
 
-		if isLongLog || isShortOutput || isVerbose {
+		if isLongLog || isShortOutput || isVerbose || isQuiet {
 			if !isVerbose || strings.Contains(arg, "=") {
 				// Add to logArgs for flag parsing (skip already-handled stacked -vv)
 				logArgs = append(logArgs, arg)
@@ -257,6 +261,10 @@ func (f *logConfig) scan(args []string) {
 	// -vv)
 	if f.Verbose == 0 && *verbose > 0 {
 		f.Verbose = *verbose
+	}
+
+	if *quiet {
+		f.Quiet = true
 	}
 
 	// Apply parsed string configuration
@@ -321,6 +329,10 @@ const levelStep = 4
 //	-v --log-level=error   => error + 1 = warn
 //	--log-level=warn  -v   => warn  + 1 = info
 func (f *logConfig) applyVerbosity() log.Level {
+	if f.Quiet {
+		return log.LevelError
+	}
+
 	base := log.ParseLevel(string(f.Level))
 	adjusted := base - log.Level(f.Verbose*levelStep)
 

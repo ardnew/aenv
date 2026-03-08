@@ -22,7 +22,7 @@ const defaultConfigIndent = 2
 
 // Init generates a default configuration file with current flag values.
 type Init struct {
-	Force bool `help:"Overwrite existing configuration file" short:"f"`
+	Force bool `help:"Overwrite existing configuration file" negatable:"" short:"w"`
 }
 
 // Run executes the init command.
@@ -35,7 +35,7 @@ func (i *Init) Run(ctx context.Context) (err error) {
 
 	confPath, ok := ktx.Model.Vars()[ConfigIdentifier]
 	if !ok {
-		panic("internal error: config namespace undefined")
+		return ErrMissingConfig
 	}
 
 	// Check if file exists and force not set
@@ -69,6 +69,8 @@ func (i *Init) Run(ctx context.Context) (err error) {
 		"initialized configuration file",
 		slog.String("path", confPath),
 	)
+
+	fmt.Printf("Configuration written to %s\n", confPath)
 
 	return nil
 }
