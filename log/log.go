@@ -2,6 +2,8 @@ package log
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"runtime"
@@ -108,6 +110,147 @@ func (l Logger) Format() Format {
 	return l.format
 }
 
+// Raw writes s directly to the configured output with no formatting,
+// attributes, or log metadata. A trailing newline is appended if s does not
+// already end with one. Output is always emitted regardless of the configured
+// log level.
+func (l Logger) Raw(s string) {
+	if l.Logger == nil || len(s) == 0 {
+		return
+	}
+
+	if l.mutex == nil {
+		l.mutex = &sync.RWMutex{}
+	}
+
+	data := []byte(s)
+	if s[len(s)-1] != '\n' {
+		data = append(data, '\n')
+	}
+
+	l.mutex.Lock()
+	_, _ = l.output.Write(data)
+	l.mutex.Unlock()
+}
+
+// Print writes only the provided attributes to the configured output using
+// the configured format. No timestamp, level, message, or source information
+// is included. Output is always emitted regardless of the configured log level.
+//
+// For JSON format, attributes are rendered as a single JSON object.
+// For text format, attributes are rendered as space-separated key=value pairs.
+func (l Logger) Print(attrs ...slog.Attr) {
+	if l.Logger == nil || len(attrs) == 0 {
+		return
+	}
+
+	if l.mutex == nil {
+		l.mutex = &sync.RWMutex{}
+	}
+
+	var data []byte
+
+	l.mutex.RLock()
+	format := l.format
+	pretty := l.pretty
+	l.mutex.RUnlock()
+
+	switch format {
+	case FormatJSON:
+		data = printJSON(pretty, attrs)
+	case FormatText:
+		data = printText(pretty, attrs)
+	default:
+		return
+	}
+
+	l.mutex.Lock()
+	_, _ = l.output.Write(data)
+	l.mutex.Unlock()
+}
+
+// printJSON renders attributes as a JSON object.
+func printJSON(pretty bool, attrs []slog.Attr) []byte {
+	m := attrsToMap(attrs)
+
+	var data []byte
+	if pretty {
+		data, _ = json.MarshalIndent(m, "", "  ")
+	} else {
+		data, _ = json.Marshal(m)
+	}
+
+	return append(data, '\n')
+}
+
+// attrsToMap recursively converts [slog.Attr] values to a map, handling
+// groups as nested maps.
+func attrsToMap(attrs []slog.Attr) map[string]any {
+	m := make(map[string]any, len(attrs))
+	for _, a := range attrs {
+		if a.Value.Kind() == slog.KindGroup {
+			m[a.Key] = attrsToMap(a.Value.Group())
+		} else {
+			m[a.Key] = a.Value.Any()
+		}
+	}
+
+	return m
+}
+
+// printText renders attributes as space-separated key=value pairs.
+func printText(_ bool, attrs []slog.Attr) []byte {
+	var buf []byte
+
+	for i, a := range attrs {
+		if i > 0 {
+			buf = append(buf, ' ')
+		}
+
+		buf = append(buf, a.Key...)
+		buf = append(buf, '=')
+		buf = appendTextValue(buf, a.Value)
+	}
+
+	return append(buf, '\n')
+}
+
+// appendTextValue appends the text representation of a [slog.Value] to buf.
+func appendTextValue(buf []byte, v slog.Value) []byte {
+	switch v.Kind() {
+	case slog.KindString:
+		return append(buf, v.String()...)
+	case slog.KindInt64:
+		return fmt.Appendf(buf, "%d", v.Int64())
+	case slog.KindUint64:
+		return fmt.Appendf(buf, "%d", v.Uint64())
+	case slog.KindFloat64:
+		return fmt.Appendf(buf, "%g", v.Float64())
+	case slog.KindBool:
+		return fmt.Appendf(buf, "%t", v.Bool())
+	case slog.KindDuration:
+		return append(buf, v.Duration().String()...)
+	case slog.KindTime:
+		return append(buf, v.Time().Format(time.RFC3339Nano)...)
+	case slog.KindGroup:
+		buf = append(buf, '{')
+
+		for i, a := range v.Group() {
+			if i > 0 {
+				buf = append(buf, ' ')
+			}
+
+			buf = append(buf, a.Key...)
+			buf = append(buf, '=')
+			buf = appendTextValue(buf, a.Value)
+		}
+
+		return append(buf, '}')
+	default:
+		return fmt.Appendf(buf, "%v", v.Any())
+	}
+}
+
 // TraceContext logs a message at Trace level with the provided context.
 func (l Logger) TraceContext(
 	ctx context.Context,
@@ -119,7 +262,7 @@ func (l Logger) TraceContext(
 
 // Trace logs a message at Trace level.
 func (l Logger) Trace(msg string, attrs ...slog.Attr) {
-	l.TraceContext(DefaultContextProvider(), msg, attrs...)
+	l.logContext(DefaultContextProvider(), LevelTrace, msg, attrs...)
 }
 
 // DebugContext logs a message at Debug level with the provided context.
@@ -133,7 +276,7 @@ func (l Logger) DebugContext(
 
 // Debug logs a message at Debug level.
 func (l Logger) Debug(msg string, attrs ...slog.Attr) {
-	l.DebugContext(DefaultContextProvider(), msg, attrs...)
+	l.logContext(DefaultContextProvider(), LevelDebug, msg, attrs...)
 }
 
 // InfoContext logs a message at Info level with the provided context.
@@ -147,7 +290,7 @@ func (l Logger) InfoContext(
 
 // Info logs a message at Info level.
 func (l Logger) Info(msg string, attrs ...slog.Attr) {
-	l.InfoContext(DefaultContextProvider(), msg, attrs...)
+	l.logContext(DefaultContextProvider(), LevelInfo, msg, attrs...)
 }
 
 // WarnContext logs a message at Warn level with the provided context.
@@ -161,7 +304,7 @@ func (l Logger) WarnContext(
 
 // Warn logs a message at Warn level.
 func (l Logger) Warn(msg string, attrs ...slog.Attr) {
-	l.WarnContext(DefaultContextProvider(), msg, attrs...)
+	l.logContext(DefaultContextProvider(), LevelWarn, msg, attrs...)
 }
 
 // ErrorContext logs a message at Error level with the provided context.
@@ -175,7 +318,7 @@ func (l Logger) ErrorContext(
 
 // Error logs a message at Error level.
 func (l Logger) Error(msg string, attrs ...slog.Attr) {
-	l.ErrorContext(DefaultContextProvider(), msg, attrs...)
+	l.logContext(DefaultContextProvider(), LevelError, msg, attrs...)
 }
 
 // logContext writes a log message at the specified level with the provided
@@ -198,21 +341,18 @@ func (l Logger) logContext(
 		defer l.mutex.RUnlock()
 	}
 
-	// Use the lower-level log method to manually control the call stack skip.
-	// We need to skip 4 frames to get to the actual caller:
-	// 1. logContext (this function)
-	// 2. TraceContext/DebugContext/InfoContext/WarnContext/ErrorContext
-	// 3. Trace/Debug/Info/Warn/Error (optional - only for non-Context variants)
-	// Since slog.Logger doesn't expose PC control directly, we use the Handler
-	// interface with a custom Record that has the correct PC.
+	// Use the lower-level Handler interface to manually control the call
+	// stack skip. Both *Context and non-Context variants call logContext
+	// directly, keeping the skip depth constant at 3:
+	// 1=runtime.Callers, 2=logContext, 3=public logging method
 	if !l.Enabled(ctx, slog.Level(level)) {
 		return
 	}
 
 	var pcs [1]uintptr
-	// Skip 4 frames to get to actual caller:
-	// 1=runtime.Callers, 2=logContext, 3=*Context method, 4=package-level wrapper
-	runtime.Callers(4, pcs[:])
+	// Skip 3 frames to get to actual caller:
+	// 1=runtime.Callers, 2=logContext, 3=public logging method
+	runtime.Callers(3, pcs[:])
 
 	r := slog.NewRecord(time.Now(), slog.Level(level), msg, pcs[0])
 	r.AddAttrs(attrs...)
