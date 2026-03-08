@@ -8,20 +8,22 @@
 *.trace
 *.out
 *.test
+*.local.json
+
+/*.sh
 
 *.pprof
 *.prof
 
 /notes.md
-/internal/*.md
 /*.txt
 /*.svg
 
-/aenv
-.aenv
+*aenv
 
 **/*instructions.md
 **/*prompt.md
-*claude*
-*CLAUDE*
-*AGENTS*
+
+.sisyphus
+.superpowers
+.superpowers-agents

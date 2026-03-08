@@ -119,13 +119,9 @@
 // When built with the pprof tag, this package imports [net/http/pprof], which
 // registers HTTP handlers for runtime profiling at /debug/pprof/.
 //
-// To use HTTP profiling, your application must start an HTTP server:
+// The HTTP server is only started when the --pprof-http flag is given:
 //
-//	import _ "net/http/pprof"
-//
-//	go func() {
-//	    log.Println(http.ListenAndServe("localhost:6060", nil))
-//	}()
+//	./aenv --pprof-mode=cpu --pprof-http=localhost:6060
 //
 // Common HTTP endpoints:
 //
