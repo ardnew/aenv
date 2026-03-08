@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,10 +19,14 @@ import (
 
 	"github.com/ardnew/aenv/lang"
 	"github.com/ardnew/aenv/log"
+	"github.com/ardnew/aenv/pkg"
 )
 
 // editASTMsg is sent when AST editing completes successfully.
-type editASTMsg struct{ ast *lang.AST }
+type editASTMsg struct {
+	ast       *lang.AST
+	unchanged bool
+}
 
 // editCancelledMsg is sent when the user cleared the editor content.
 type editCancelledMsg struct{}
@@ -38,28 +43,123 @@ const (
 	ctrlPrompt = " :"
 )
 
-func helpMessage() string {
-	return `
-: Commands (press Esc to toggle mode):
+// helpTopic defines a single help topic with its short summary and detailed
+// content.
+type helpTopic struct {
+	name    string // topic identifier (used in :help <topic>)
+	summary string // one-line summary shown in :help overview
+	detail  string // detailed help text shown by :help <topic>
+}
 
-  help     Print this cruft
-  list     List top-level namespaces
-  edit     Edit source in external $EDITOR
-  clear    Clear screen
-  quit     Exit REPL
+// helpTopics defines the available help topics in display order.
+var helpTopics = []helpTopic{
+	{
+		name:    "keys",
+		summary: "Keyboard shortcuts and keybindings",
+		detail: `Keybindings:
+  [Esc]     Toggle between evaluation and command modes
+  [Tab]     Cycle forward through completions ([Shift] reverse)
+  [↑][↓]    Navigate history ([Shift] current mode, [Alt] command mode)
+  [Ctrl-L]  Clear screen
+  [Ctrl-C]  Clear input (quit if input is empty)
+  [Ctrl-D]  Quit REPL`,
+	},
+	{
+		name:    "commands",
+		summary: "Available REPL commands",
+		detail: `Commands:
+  help [topic]  Show help overview, or detail on a topic
+  list          List top-level namespaces
+  edit          Edit source in external $EDITOR
+  clear         Clear screen
+  quit          Exit REPL
 
-Usage:
-  Type an expression to evaluate it (namespaces are variables)
-  Completions appear automatically as you type
-  Press Tab / Shift-Tab to cycle through candidates
-  Press Space to accept the current candidate
-  Press Esc to toggle between eval and command modes
-  Use Up/Down arrows for history navigation (mode switches automatically)
-  Use Shift+Up/Shift+Down for history navigation within current mode only
-  Use Alt+Up/Alt+Down to switch to command mode and navigate command history
-    (restores original mode when reaching end of history)
-  Press Ctrl+C on empty line or Ctrl+D to exit
-`
+Short aliases: h, l, e, c, q`,
+	},
+	{
+		name:    "eval",
+		summary: "Expression evaluation syntax",
+		detail: `Evaluation:
+  outer.inner         Simple namespace member access
+  outer(a, b).inner   Parameterized namespace member access
+  param[index]        Variadic parameter access
+
+  Auto-completion hints reveal all available in-scope identifiers.
+  Function signatures are hinted when the cursor is inside a function call.`,
+	},
+	{
+		name:    "nav",
+		summary: "Mode switching and history navigation",
+		detail: `Navigation:
+  Type : on an empty line to enter command mode.
+  Press Esc to toggle between eval and command modes.
+
+History:
+  [↑][↓]          Navigate across all history (mode switches automatically)
+  [Shift+↑][↓]    Navigate within current mode only
+  [Alt+↑][↓]      Navigate command history (restores current mode on exit)
+
+Exiting:
+  Press Ctrl+C on an empty line or Ctrl+D to exit.`,
+	},
+}
+
+// helpTopicNames returns the sorted list of topic names for completion.
+func helpTopicNames() []string {
+	names := make([]string, len(helpTopics))
+	for i, t := range helpTopics {
+		names[i] = t.name
+	}
+
+	return names
+}
+
+// helpOverview returns the top-level help output listing available topics.
+func helpOverview() string {
+	var b strings.Builder
+
+	b.WriteString(
+		"\nType :help <topic> for details on any topic listed below.\n\n",
+	)
+
+	// Find max topic name length for alignment.
+	maxLen := 0
+	for _, t := range helpTopics {
+		if len(t.name) > maxLen {
+			maxLen = len(t.name)
+		}
+	}
+
+	for _, t := range helpTopics {
+		pad := strings.Repeat(" ", maxLen-len(t.name)+2)
+		b.WriteString(fmt.Sprintf("  %s%s%s\n", t.name, pad, t.summary))
+	}
+
+	return b.String()
+}
+
+// helpDetail returns the detailed text for a specific topic, or an error
+// message if the topic is not found.
+func helpDetail(topic string) string {
+	topic = strings.ToLower(strings.TrimSpace(topic))
+
+	for _, t := range helpTopics {
+		if t.name == topic {
+			return "\n" + t.detail + "\n"
+		}
+	}
+
+	var b strings.Builder
+
+	b.WriteString(
+		fmt.Sprintf("Unknown help topic: %s\n\nAvailable topics:\n", topic),
+	)
+
+	for _, t := range helpTopics {
+		b.WriteString(fmt.Sprintf("  %s\n", t.name))
+	}
+
+	return b.String()
 }
 
 // inputMode represents the current input mode.
@@ -120,6 +220,7 @@ type model struct {
 	altNavOrigText   string        // original text before Alt navigation
 	altNavOrigCursor int           // original cursor position before Alt navigation
 	width            int           // terminal width for ellipsization
+	editing          bool
 	quitting         bool
 	mode             inputMode
 	evalText         string
@@ -222,7 +323,11 @@ func newModel(
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	banner := hintStyle.Render(
+		fmt.Sprintf("%s %s", pkg.Name, strings.TrimSpace(pkg.Version)),
+	) + " " + hintStyle.Render("\u2014 type :help for usage")
+
+	return tea.Batch(textinput.Blink, tea.Println(banner))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -237,6 +342,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editASTMsg:
+		m.editing = false
+
+		if msg.unchanged {
+			m.logger.TraceContext(
+				m.ctxFunc(),
+				"repl edit unchanged",
+			)
+
+			return m, tea.Println(hintStyle.Render("✔ — AST unmodified"))
+		}
+
 		m.ast = msg.ast
 		// Clear program cache since AST changed
 		lang.ClearProgramCache()
@@ -249,16 +365,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Println(resultStyle.Render("✔ — AST updated successfully"))
 
 	case editCancelledMsg:
-		return m, tea.Println(hintStyle.Render("🗴 — edit cancelled."))
+		m.editing = false
+
+		return m, tea.Println(hintStyle.Render("✘ — edit cancelled."))
 
 	case editDeclinedMsg:
-		m.quitting = true
+		m.editing = false
 
-		return m, tea.Quit
+		return m, tea.Println(hintStyle.Render("edit declined, returning to REPL"))
 
 	case editErrorMsg:
+		m.editing = false
+
 		return m, tea.Println(
-			errorStyle.Render("🗴 — error: " + msg.err.Error()),
+			errorStyle.Render("✘ — error: " + msg.err.Error()),
 		)
 	}
 
@@ -270,7 +390,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	if m.quitting {
+	if m.quitting || m.editing {
 		return ""
 	}
 
@@ -307,22 +427,33 @@ func (m model) View() string {
 		if m.mode == modeEval {
 			hint = "Type an expression or press Esc for commands"
 		} else {
-			hint = "Type: help, list, edit, clear, quit (press Esc to return)"
+			hint = "Type: help [topic], list, edit, clear, quit (press Esc to return)"
 		}
 
 		b.WriteString(hintStyle.Render(hint))
 		b.WriteString("\n")
 
 	case funcCall.inCall && m.mode == modeEval:
-		// Show function signature hint with current parameter highlighted
-		signature, params := getSignature(m.ast, funcCall.name)
-		if signature != "" {
-			hint := renderSignatureHint(signature, params, funcCall.argIndex)
-			b.WriteString(hint)
+		// When the user has typed a partial word (or is Tab-cycling through
+		// candidates), show the completion bar instead of the signature hint.
+		// The signature is shown only when the word at the cursor is empty and
+		// the user is not actively browsing completions.
+		word, _, _ := wordBounds(input, cursor)
+		showCandidates := len(m.matches) > 0 && (word != "" || m.tabActive)
+
+		if showCandidates {
+			bar := renderCandidateBar(
+				m.matches, m.suggIdx, m.tabActive, m.width,
+			)
+			b.WriteString(bar)
 			b.WriteString("\n")
 		} else {
-			// Function not found, show completion bar if available
-			if len(m.matches) > 0 {
+			signature, params := getSignature(m.ast, funcCall.name)
+			if signature != "" {
+				hint := renderSignatureHint(signature, params, funcCall.argIndex)
+				b.WriteString(hint)
+				b.WriteString("\n")
+			} else if len(m.matches) > 0 {
 				bar := renderCandidateBar(
 					m.matches, m.suggIdx, m.tabActive, m.width,
 				)
@@ -358,6 +489,11 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	)
 
 	switch msg.Type {
+	case tea.KeyCtrlL:
+		m, _ = m.switchToMode(modeEval)
+
+		return m, tea.ClearScreen
+
 	case tea.KeyCtrlC:
 		if m.input.Value() == "" {
 			m.quitting = true
@@ -374,13 +510,9 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyCtrlD:
-		if m.input.Value() == "" {
-			m.quitting = true
+		m.quitting = true
 
-			return m, tea.Quit
-		}
-
-		return m, nil
+		return m, tea.Quit
 
 	case tea.KeyEnter:
 		if !m.tabActive || len(m.matches) == 0 {
@@ -480,6 +612,27 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 }
 
 func (m model) handleTab() (model, tea.Cmd) {
+	// Tab-finish: when not cycling and the typed word at the cursor is
+	// already an exact candidate, insert a contextual separator instead
+	// of starting to cycle through candidates.
+	if !m.tabActive {
+		if suffix, ok := m.tryTabFinish(); ok {
+			input := m.input.Value()
+			cursor := m.input.Position()
+			newInput := input[:cursor] + suffix + input[cursor:]
+			newCursor := cursor + len(suffix)
+
+			m.input.SetValue(newInput)
+			m.input.SetCursor(newCursor)
+			m.tabActive = false
+			m.suggIdx = -1
+			m.matches = nil
+			refreshMatches(&m, false)
+
+			return m, nil
+		}
+	}
+
 	if len(m.matches) == 0 {
 		// When input is empty at the top level in eval mode, populate all
 		// candidates sorted by priority so the user can browse everything.
@@ -576,11 +729,24 @@ func populateAllMatches(m *model) bool {
 	m.candidates = cands
 	m.matches = all
 
-	// Reset word boundaries to reflect the current (likely empty) input so
-	// that replaceCurrentWord does not use stale offsets from a previous
-	// evaluation.
-	m.wordStart = 0
-	m.wordEnd = len(m.input.Value())
+	// Reset word boundaries to reflect the current word at the cursor so
+	// that replaceCurrentWord only replaces the word under the cursor, not
+	// the entire input. This is critical when Tab is pressed inside a
+	// function argument list (e.g., "filter(keys(|), foo)").
+	_, ws, we := wordBounds(m.input.Value(), m.input.Position())
+	m.wordStart = ws
+	m.wordEnd = we
+
+	// Apply type-based filtering when inside a function call.
+	fc := detectFunctionCall(m.input.Value(), m.input.Position())
+	if fc.inCall {
+		all = filterByParamType(all, m.ast, fc)
+		if len(all) == 0 {
+			return false
+		}
+
+		m.matches = all
+	}
 
 	return true
 }
@@ -606,6 +772,16 @@ func replaceCurrentWord(m *model, replacement string) {
 // the user can freely edit without unexpected completions.
 func refreshMatches(m *model, autoConfirm bool) {
 	m.matches, m.candidates, m.wordStart, m.wordEnd = m.computeMatches()
+
+	// Apply type-based filtering when inside a function call so that
+	// candidates are narrowed to those compatible with the expected
+	// parameter type (e.g., only callables for predicate arguments).
+	if m.mode == modeEval {
+		fc := detectFunctionCall(m.input.Value(), m.input.Position())
+		if fc.inCall {
+			m.matches = filterByParamType(m.matches, m.ast, fc)
+		}
+	}
 
 	if !m.tabActive {
 		m.suggIdx = -1
@@ -731,7 +907,14 @@ func (m model) executeCommand(
 	case "h", "help":
 		m, _ = m.switchToMode(modeEval)
 
-		return m, tea.Sequence(echoCmd, tea.Println(m.helpView()))
+		var helpText string
+		if len(args) > 0 {
+			helpText = m.helpView(args[0])
+		} else {
+			helpText = m.helpView("")
+		}
+
+		return m, tea.Sequence(echoCmd, tea.Println(helpText))
 
 	case "l", "list":
 		m, _ = m.switchToMode(modeEval)
@@ -741,30 +924,33 @@ func (m model) executeCommand(
 	case "c", "clear":
 		m, _ = m.switchToMode(modeEval)
 
-		return m, tea.ClearScreen
+		return m, tea.Sequence(echoCmd, tea.ClearScreen)
 
 	case "e", "edit":
 		m, _ = m.switchToMode(modeEval)
+		m.editing = true
 
 		var editCmd tea.Cmd
 
-		m, editCmd = m.handleEdit(m.ctxFunc())
+		m, editCmd = m.handleEdit(m.ctxFunc(), formatCtrlCommand(input))
 
-		return m, tea.Sequence(echoCmd, editCmd)
+		return m, editCmd
 
 	default:
 		// Unknown command — stay in command mode so the user can retry.
-		return m, tea.Println(
-			errorStyle.Render("Unknown command: " + cmd + " (try 'help')"),
+		return m, tea.Sequence(
+			echoCmd,
+			tea.Println(errorStyle.Render("Unknown command: "+cmd+" (try 'help')")),
 		)
 	}
 }
 
-func (m model) handleEdit(_ context.Context) (model, tea.Cmd) {
+func (m model) handleEdit(_ context.Context, echo string) (model, tea.Cmd) {
 	cmd := &editASTCommand{
 		ast:     m.ast,
 		ctxFunc: m.ctxFunc,
 		logger:  m.logger,
+		echo:    echo,
 	}
 
 	return m, tea.Exec(cmd, func(err error) tea.Msg {
@@ -780,7 +966,7 @@ func (m model) handleEdit(_ context.Context) (model, tea.Cmd) {
 			return editCancelledMsg{}
 		}
 
-		return editASTMsg{ast: cmd.newAST}
+		return editASTMsg{ast: cmd.newAST, unchanged: cmd.unchanged}
 	})
 }
 
@@ -957,15 +1143,51 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) helpView() string { return helpMessage() }
+// helpView returns the help text. When topic is empty, the overview is
+// returned; otherwise the detailed text for the given topic is returned.
+func (m model) helpView(topic string) string {
+	if topic == "" {
+		return helpOverview()
+	}
+
+	return helpDetail(topic)
+}
 
 func (m model) listNamespaces() string {
 	var b strings.Builder
 
+	// Collect namespaces and sort alphabetically.
+	type entry struct {
+		name    string
+		preview string
+	}
+
+	entries := make([]entry, 0, len(m.ast.Namespaces))
+
 	for ns := range m.ast.All() {
-		name := ns.Name
-		preview := formatPreview(ns)
-		b.WriteString(fmt.Sprintf("  %s %s\n", name, hintStyle.Render(preview)))
+		entries = append(entries, entry{
+			name:    ns.Name,
+			preview: formatPreview(ns),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].name < entries[j].name
+	})
+
+	// Find max name length for alignment.
+	maxLen := 0
+	for _, e := range entries {
+		if len(e.name) > maxLen {
+			maxLen = len(e.name)
+		}
+	}
+
+	for _, e := range entries {
+		pad := strings.Repeat(" ", maxLen-len(e.name)+2)
+		b.WriteString(
+			fmt.Sprintf("  %s%s%s\n", e.name, pad, hintStyle.Render(e.preview)),
+		)
 	}
 
 	return b.String()

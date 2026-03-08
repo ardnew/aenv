@@ -22,13 +22,15 @@ const defaultEditor = "vi"
 // user's editor, and re-parses the result. On parse error the user is prompted
 // to re-edit; declining exits the program.
 type editASTCommand struct {
-	ast     *lang.AST
-	ctxFunc func() context.Context
-	newAST  *lang.AST
-	logger  log.Logger
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
+	ast       *lang.AST
+	ctxFunc   func() context.Context
+	newAST    *lang.AST
+	logger    log.Logger
+	unchanged bool
+	echo      string
+	stdin     io.Reader
+	stdout    io.Writer
+	stderr    io.Writer
 }
 
 // SetStdin sets the stdin reader for the command.
@@ -44,6 +46,13 @@ func (c *editASTCommand) SetStderr(w io.Writer) { c.stderr = w }
 // editor, parses the result, and prompts on error. If the user declines to
 // re-edit, it returns [ErrEditDeclined].
 func (c *editASTCommand) Run() error {
+	// Echo the command prompt before launching the editor so it appears
+	// without an intermediate TUI render cycle (which would insert a blank
+	// prompt line).
+	if c.echo != "" {
+		fmt.Fprintln(c.stdout, c.echo)
+	}
+
 	ctx := c.ctxFunc()
 
 	// Format AST to native syntax.
@@ -112,6 +121,12 @@ func (c *editASTCommand) Run() error {
 		if parseErr == nil {
 			c.newAST = newAST
 
+			// Compare canonical representations to detect no-op edits.
+			var newBuf bytes.Buffer
+			if fmtErr := newAST.Format(ctx, &newBuf, 2); fmtErr == nil {
+				c.unchanged = newBuf.String() == content
+			}
+
 			return nil
 		}
 
@@ -151,6 +166,7 @@ func runEditor(
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = defaultEditor
+		fmt.Fprintf(stderr, "$EDITOR not set, using %s\n", editor)
 	}
 
 	cmd := exec.CommandContext(ctx, editor, path)

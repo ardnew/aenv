@@ -19,6 +19,7 @@ const (
 	typeNameString = "string"
 	typeNameArg    = "arg"
 	typeNameArray  = "array"
+	typeNameFunc   = "func"
 )
 
 // signatureCache stores precomputed function signatures to avoid repeated
@@ -286,7 +287,7 @@ func formatSemanticTypeName(
 			return "predicate"
 		}
 
-		return "func"
+		return typeNameFunc
 	case reflect.String:
 		return typeNameString
 	case reflect.Slice:
@@ -586,7 +587,7 @@ func getBuiltinSignatureUncached(funcName string) (string, []string, bool) {
 func formatTypeName(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.Func:
-		return "func"
+		return typeNameFunc
 	case reflect.String:
 		return typeNameString
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
