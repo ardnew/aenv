@@ -347,7 +347,7 @@ type evalContext struct {
 // the same pointers lets the cycle detection in resolveForEnv work correctly.
 func (ctx *evalContext) mergedNamespaces() []*Namespace {
 	if ctx.merged == nil {
-		ctx.merged = mergeEntries(ctx.ast.Namespaces)
+		ctx.merged = ctx.ast.mergedNamespaces()
 	}
 
 	return ctx.merged

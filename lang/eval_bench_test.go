@@ -424,3 +424,26 @@ func BenchmarkEvaluateNamespace_DiamondDeps(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMergeEntries_Repeated measures mergeEntries cost across
+// repeated evaluations of the same AST.
+func BenchmarkMergeEntries_Repeated(b *testing.B) {
+	config := `a : 1; b : 2; c : 3; d : 4; e : 5; f : 6; g : 7; h : 8`
+	ast, err := ParseString(context.Background(), config)
+	if err != nil {
+		b.Fatalf("parse error: %v", err)
+	}
+
+	// Pre-warm
+	_, _ = ast.EvaluateNamespace(context.Background(), "h", nil)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, err := ast.EvaluateNamespace(context.Background(), "h", nil)
+		if err != nil {
+			b.Fatalf("eval error: %v", err)
+		}
+	}
+}

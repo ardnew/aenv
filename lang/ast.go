@@ -10,10 +10,12 @@ import (
 
 // AST is the root of the abstract syntax tree.
 type AST struct {
-	Namespaces []*Namespace
-	index      map[string]*Namespace // O(1) namespace lookup index
-	opts       options
-	logger     log.Logger
+	Namespaces  []*Namespace
+	index       map[string]*Namespace // O(1) namespace lookup index
+	merged      []*Namespace          // cached mergeEntries result
+	mergedValid bool                  // true when merged is up-to-date
+	opts        options
+	logger      log.Logger
 }
 
 // options holds AST-wide configuration.
@@ -139,6 +141,17 @@ func (a *AST) All() iter.Seq[*Namespace] {
 	}
 }
 
+// mergedNamespaces returns the deduplicated/merged top-level namespaces,
+// computing and caching the result on first call or after invalidation.
+func (a *AST) mergedNamespaces() []*Namespace {
+	if !a.mergedValid {
+		a.merged = mergeEntries(a.Namespaces)
+		a.mergedValid = true
+	}
+
+	return a.merged
+}
+
 // RemoveNamespace removes all namespaces with the given name from the AST.
 // It returns true if at least one namespace was removed.
 func (a *AST) RemoveNamespace(name string) bool {
@@ -153,8 +166,12 @@ func (a *AST) RemoveNamespace(name string) bool {
 	removed := len(filtered) != len(a.Namespaces)
 	a.Namespaces = filtered
 
-	if removed && a.index != nil {
-		delete(a.index, name)
+	if removed {
+		a.mergedValid = false
+
+		if a.index != nil {
+			delete(a.index, name)
+		}
 	}
 
 	return removed
@@ -178,6 +195,8 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 				a.index[name] = ns
 			}
 
+			a.mergedValid = false
+
 			return
 		}
 	}
@@ -188,6 +207,8 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 	if a.index != nil {
 		a.index[name] = ns
 	}
+
+	a.mergedValid = false
 }
 
 // buildIndex creates the namespace lookup index for O(1) access.
