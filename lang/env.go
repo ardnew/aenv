@@ -34,6 +34,12 @@ var (
 // environment containing built-in variables and functions. The returned map
 // can be safely mutated by the caller without affecting the shared cache.
 func makeEnvCache() map[string]any {
+	return maps.Clone(builtinEnv())
+}
+
+// builtinEnv returns the shared immutable built-in environment.
+// Callers MUST NOT modify the returned map.
+func builtinEnv() map[string]any {
 	envCacheOnce.Do(func() {
 		envCache = map[string]any{
 			// System information (struct/string values).
@@ -58,7 +64,7 @@ func makeEnvCache() map[string]any {
 		}
 	})
 
-	return maps.Clone(envCache)
+	return envCache
 }
 
 // BuiltinEnvCache returns a copy of the built-in environment cache.

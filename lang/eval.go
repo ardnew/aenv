@@ -215,7 +215,7 @@ func (a *AST) EvaluateNamespace(
 		}
 	}
 
-	if logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
+	if logger.Logger != nil && logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
 		logger.TraceContext(
 			ctx,
 			"param bindings",
@@ -274,7 +274,7 @@ func (a *AST) EvaluateExpr(
 	runtimeEnv := ectx.buildRuntimeEnv()
 	defer returnRuntimeEnv(runtimeEnv)
 
-	if logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
+	if logger.Logger != nil && logger.Enabled(ctx, slog.Level(log.LevelTrace)) {
 		logger.TraceContext(
 			ctx,
 			"runtime env keys",
@@ -378,7 +378,7 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	env := ctx.buildRuntimeEnv()
 	defer returnRuntimeEnv(env)
 
-	if ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+	if ctx.logger.Logger != nil && ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
 		ctx.logger.TraceContext(
 			ctx.get(),
 			"eval expr",
@@ -494,7 +494,7 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 		result[ns.Name] = evaluated
 	}
 
-	if ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+	if ctx.logger.Logger != nil && ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
 		ctx.logger.TraceContext(
 			ctx.get(),
 			"block result",
@@ -980,24 +980,15 @@ func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 }
 
 // isFunction reports whether v is any callable Go value.
-// It uses a type-switch fast path for common types (~95% of cases) to avoid
-// reflection overhead. For user-defined namespaces with concrete signatures,
-// only the fallback reflection check will match.
+// It uses reflection so that all function types — including builtin helpers
+// with concrete signatures (e.g. func() string) — are detected correctly,
+// not just the variadic func(...any)(any,error) used for user namespaces.
 func isFunction(v any) bool {
-	switch v.(type) {
-	case nil:
+	if v == nil {
 		return false
-	case string, bool, int, int64, float64, uint, uint64:
-		return false
-	case []any, map[string]any:
-		return false
-	case *FuncRef:
-		return false
-	case func(...any) (any, error):
-		return true
-	default:
-		return reflect.TypeOf(v).Kind() == reflect.Func
 	}
+
+	return reflect.TypeOf(v).Kind() == reflect.Func
 }
 
 // funcRefSignature derives a human-readable call signature for a function

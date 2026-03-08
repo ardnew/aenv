@@ -307,3 +307,25 @@ func BenchmarkIsFunction(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkEvaluateExpr_LoggingOverhead measures sortedKeys cost.
+func BenchmarkEvaluateExpr_LoggingOverhead(b *testing.B) {
+	config := `a : 1; b : 2; c : 3; d : 4; e : 5`
+	ast, err := ParseString(context.Background(), config)
+	if err != nil {
+		b.Fatalf("parse error: %v", err)
+	}
+
+	// Pre-warm cache
+	_, _ = ast.EvaluateExpr(context.Background(), "a + b")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, err := ast.EvaluateExpr(context.Background(), "a + b")
+		if err != nil {
+			b.Fatalf("eval error: %v", err)
+		}
+	}
+}
