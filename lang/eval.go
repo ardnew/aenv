@@ -37,13 +37,24 @@ var (
 // compileExpr compiles an expression, using cache when possible.
 func compileExpr(
 	source string,
+	scopeLen int,
 	env map[string]any,
 	patcher expr.Option,
 ) (*vm.Program, error) {
+	// Build composite cache key when scopeLen >= 0 (scoped compilation).
+	// This prevents programs compiled with one visible scope from being reused
+	// for a different scope, preserving forward-reference detection.
+	// When scopeLen < 0, use source alone (unscoped evaluation, e.g.,
+	// EvaluateExpr).
+	cacheKey := source
+	if scopeLen >= 0 {
+		cacheKey = source + "\x00" + strconv.Itoa(scopeLen)
+	}
+
 	// Check cache first (read lock)
 	programCacheMu.RLock()
 
-	if prog, ok := programCache[source]; ok {
+	if prog, ok := programCache[cacheKey]; ok {
 		programCacheMu.RUnlock()
 
 		return prog, nil
@@ -57,7 +68,7 @@ func compileExpr(
 
 	// Double-check after acquiring write lock (another goroutine may have added
 	// it)
-	if prog, ok := programCache[source]; ok {
+	if prog, ok := programCache[cacheKey]; ok {
 		return prog, nil
 	}
 
@@ -72,7 +83,7 @@ func compileExpr(
 	}
 
 	// Add to cache (simple unbounded cache for now)
-	programCache[source] = program
+	programCache[cacheKey] = program
 
 	return program, nil
 }
@@ -289,7 +300,7 @@ func (a *AST) EvaluateExpr(
 		logger:     logger,
 	}
 
-	program, err := compileExpr(source, runtimeEnv, expr.Patch(patcher))
+	program, err := compileExpr(source, -1, runtimeEnv, expr.Patch(patcher))
 	if err != nil {
 		return nil, ErrExprCompile.Wrap(err).
 			With(slog.String("source", source))
@@ -394,22 +405,15 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 		logger:     ctx.logger,
 	}
 
-	// When evaluating with a lexically restricted scope (visible != nil),
-	// bypass the program cache: a cached program compiled with a broader env
-	// could silently succeed even when a forward-reference variable is absent,
-	// defeating the forward-reference error. Recompiling against the current
-	// env ensures the type-checker catches any out-of-scope identifiers.
-	var (
-		program *vm.Program
-		err     error
-	)
-
+	// Compute scope length for cache key: when ctx.visible != nil, programs
+	// compiled with one visible scope shouldn't be reused for another (ensures
+	// forward-reference errors remain detectable).
+	scopeLen := -1
 	if ctx.visible != nil {
-		program, err = expr.Compile(source, expr.Env(env), expr.Patch(patcher))
-	} else {
-		program, err = compileExpr(source, env, expr.Patch(patcher))
+		scopeLen = len(ctx.visible)
 	}
 
+	program, err := compileExpr(source, scopeLen, env, expr.Patch(patcher))
 	if err != nil {
 		return nil, ErrExprCompile.Wrap(err).
 			With(slog.String("source", source))

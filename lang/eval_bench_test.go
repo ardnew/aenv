@@ -329,3 +329,55 @@ func BenchmarkEvaluateExpr_LoggingOverhead(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkEvaluateNamespace_CompileCost(b *testing.B) {
+	tests := []struct {
+		name   string
+		config string
+		ns     string
+		args   []string
+	}{
+		{
+			name:   "single_dep",
+			config: `a x : x + 1; b x : a(x) * 2`,
+			ns:     "b",
+			args:   []string{"5"},
+		},
+		{
+			name:   "chain_3",
+			config: `a x : x + 1; b x : a(x) * 2; c x : b(x) + 3`,
+			ns:     "c",
+			args:   []string{"5"},
+		},
+		{
+			name:   "chain_5",
+			config: `a x : x + 1; b x : a(x) * 2; c x : b(x) + 3; d x : c(x) - 1; e x : d(x) * 4`,
+			ns:     "e",
+			args:   []string{"5"},
+		},
+	}
+
+	for _, tt := range tests {
+		b.Run(tt.name, func(b *testing.B) {
+			ast, err := ParseString(context.Background(), tt.config)
+			if err != nil {
+				b.Fatalf("parse error: %v", err)
+			}
+
+			_, err = ast.EvaluateNamespace(context.Background(), tt.ns, tt.args)
+			if err != nil {
+				b.Fatalf("eval error: %v", err)
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				_, err := ast.EvaluateNamespace(context.Background(), tt.ns, tt.args)
+				if err != nil {
+					b.Fatalf("eval error: %v", err)
+				}
+			}
+		})
+	}
+}
