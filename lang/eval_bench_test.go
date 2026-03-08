@@ -3,6 +3,7 @@ package lang
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -423,6 +424,71 @@ func BenchmarkEvaluateNamespace_DiamondDeps(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkEvaluateNamespace_SelectiveEval(b *testing.B) {
+	var parts []string
+	for i := 0; i < 20; i++ {
+		parts = append(parts, fmt.Sprintf("ns%d : %d", i, i*10))
+	}
+	parts = append(parts, "result : ns0 + ns1")
+	config := strings.Join(parts, "; ")
+
+	ast, err := ParseString(context.Background(), config)
+	if err != nil {
+		b.Fatalf("parse error: %v", err)
+	}
+
+	b.Run("target_refs_2_of_20", func(b *testing.B) {
+		_, _ = ast.EvaluateNamespace(context.Background(), "result", nil)
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			_, err := ast.EvaluateNamespace(
+				context.Background(), "result", nil,
+			)
+			if err != nil {
+				b.Fatalf("eval error: %v", err)
+			}
+		}
+	})
+
+	b.Run("target_refs_all", func(b *testing.B) {
+		allParts := make([]string, 0, 22)
+		for i := 0; i < 20; i++ {
+			allParts = append(allParts, fmt.Sprintf("ns%d : %d", i, i*10))
+		}
+		allRefs := make([]string, 20)
+		for i := 0; i < 20; i++ {
+			allRefs[i] = fmt.Sprintf("ns%d", i)
+		}
+		allParts = append(allParts,
+			"total : "+strings.Join(allRefs, " + "))
+		allConfig := strings.Join(allParts, "; ")
+
+		allAST, err := ParseString(context.Background(), allConfig)
+		if err != nil {
+			b.Fatalf("parse error: %v", err)
+		}
+
+		_, _ = allAST.EvaluateNamespace(
+			context.Background(), "total", nil,
+		)
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			_, err := allAST.EvaluateNamespace(
+				context.Background(), "total", nil,
+			)
+			if err != nil {
+				b.Fatalf("eval error: %v", err)
+			}
+		}
+	})
 }
 
 // BenchmarkMergeEntries_Repeated measures mergeEntries cost across

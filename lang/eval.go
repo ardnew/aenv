@@ -339,6 +339,7 @@ type evalContext struct {
 	resolved   map[*Value]any      // memoization for resolveForEnv
 	merged     []*Namespace        // cached merged top-level namespaces
 	visible    []*Namespace        // top-level namespaces in scope (nil = all merged)
+	needed     map[string]struct{}
 }
 
 // mergedNamespaces returns the deduplicated/merged top-level namespaces,
@@ -386,6 +387,16 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	// Skip empty expressions
 	if source == "" {
 		return "", nil
+	}
+
+	ids := scanIdentifiers(source)
+	if len(ids) > 0 {
+		if ctx.needed == nil {
+			ctx.needed = make(map[string]struct{}, len(ids))
+		}
+		for _, id := range ids {
+			ctx.needed[id] = struct{}{}
+		}
 	}
 
 	// Build runtime environment with resolved parameter values
@@ -556,6 +567,14 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 			continue
 		}
 
+		if ctx.needed != nil {
+			if _, ref := ctx.needed[ns.Name]; !ref {
+				env[ns.Name] = nil
+
+				continue
+			}
+		}
+
 		// When a lexical scope is active (visible != nil), each namespace's
 		// definition-point scope is the prefix of the full merged list up to
 		// and including its own position. This enables self-recursion while
@@ -586,6 +605,7 @@ func (ctx *evalContext) buildRuntimeEnv() map[string]any {
 				resolved:   ctx.resolved,
 				merged:     ctx.merged,
 				visible:    defScope,
+				needed:     ctx.needed,
 			}
 			env[ns.Name] = resolveCtx.resolveForEnv(ns.Value)
 		}
