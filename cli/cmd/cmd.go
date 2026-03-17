@@ -220,5 +220,5 @@ func hasUserSourcesFrom(ctx context.Context) bool {
 
 // stdinSourceFiles returns a SourceFiles that reads only from stdin.
 func stdinSourceFiles() SourceFiles {
-	return &sourceFiles{hasStdin: true}
+	return &sourceFiles{read: nil, hasStdin: true}
 }

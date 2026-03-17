@@ -3,17 +3,20 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/ardnew/aenv/cli/cmd/repl"
 	"github.com/ardnew/aenv/lang"
 	"github.com/ardnew/aenv/log"
 )
 
-// Eval evaluates a namespace from a source file with the given arguments.
+// Eval evaluates expr-lang expressions. Each positional argument is treated as
+// a single expression, equivalent to one input line at the interactive REPL.
+// When no arguments are provided, the interactive REPL is launched.
 type Eval struct {
-	Name string   `arg:"" help:"Namespace identifier to evaluate"          name:"name" optional:""`
-	Args []string `arg:"" help:"Arguments to bind to namespace parameters" name:"args" optional:""`
+	Expr []string `arg:"" help:"Expressions to evaluate (expr-lang syntax, one per argument)" name:"expr" optional:""`
 }
 
 // Run executes the eval command.
@@ -33,40 +36,39 @@ func (e *Eval) Run(ctx context.Context) (err error) {
 	logger.TraceContext(
 		ctx,
 		"eval start",
-		slog.String("name", e.Name),
-		slog.Int("arg_count", len(e.Args)),
+		slog.Int("expr_count", len(e.Expr)),
 	)
 
-	if e.Name == "" {
+	if len(e.Expr) == 0 {
 		return repl.Run(ctx, sourceFilesFrom(ctx), cacheDir, logger)
 	}
 
-	reader := sourceFilesFrom(ctx)
-	if reader == nil {
-		return ErrNoSource.With(slog.String("hint", "use -f PATH or - for stdin"))
+	var reader io.Reader
+
+	if sf := sourceFilesFrom(ctx); sf != nil {
+		reader = sf
+	} else {
+		reader = strings.NewReader("")
 	}
 
-	ast, err := lang.ParseReader(
-		ctx,
-		reader,
-		// lang.WithLogger(logger),
-	)
+	ast, err := lang.ParseReader(ctx, reader)
 	if err != nil {
 		return lang.WrapError(err).
 			With(slog.String("command", "eval"))
 	}
 
-	result, err := ast.EvaluateNamespace(ctx, e.Name, e.Args)
-	if err != nil {
-		return lang.WrapError(err).
-			With(
-				slog.String("command", "eval"),
-				slog.String("namespace", e.Name),
-			)
-	}
+	for _, expr := range e.Expr {
+		result, err := ast.EvaluateExpr(ctx, expr)
+		if err != nil {
+			return lang.WrapError(err).
+				With(
+					slog.String("command", "eval"),
+					slog.String("expr", expr),
+				)
+		}
 
-	// Print result in native format
-	fmt.Println(lang.FormatResult(result))
+		fmt.Println(lang.FormatResult(result))
+	}
 
 	return nil
 }
