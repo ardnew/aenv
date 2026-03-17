@@ -8,44 +8,25 @@
 //
 // # Parser
 //
-// The package uses the lang package's streaming parser with both method-based
-// and functional interfaces for efficient access to definitions:
+// The package uses the [lang] package to parse aenv configuration files into
+// an [lang.AST]:
 //
-// Method-based interface (recommended):
-//   - [lang.NewStream]: Create a parser from an io.Reader
-//   - [lang.NewStreamFromString]: Create a parser from a string
-//   - [lang.Stream.GetDefinition]: Retrieve a specific definition by identifier
-//   - [lang.Stream.Definitions]: Iterate over all definitions using iter.Seq
-//   - [lang.Stream.AST]: Access the complete parsed AST
+//   - [lang.ParseReader]: Parse an [lang.AST] from an [io.Reader]
+//   - [lang.ParseString]: Parse an [lang.AST] from a string
+//   - [lang.AST.GetNamespace]: Retrieve a namespace by name
+//   - [lang.AST.All]: Iterate over all namespaces
 //
-// Functional interface:
-// - [lang.GetDefinitionFrom]: Directly retrieve a definition from an io.Reader
-// - [lang.DefinitionsFrom]: Get an iterator over definitions from an io.Reader
-//
-// Utility:
-//   - [lang.ClearCache]: Clear all cached ASTs (useful for testing)
-//
-// The parser caches parsed ASTs by source content, ensuring identical content
-// is parsed only once even when accessed from multiple goroutines.
+// - [lang.AST.EvaluateNamespace]: Evaluate a namespace with optional arguments
 //
 // Example usage:
 //
-//	// Method-based streaming interface
-//	p := lang.NewStreamFromString(`config : { level = "debug" }`)
-//	def, err := p.GetDefinition("config")
-//
-//	// Iterate over all definitions
-//	for def := range p.Definitions() {
-//	    fmt.Println(def.Identifier.LiteralString())
-//	}
-//
-//	// Functional interface
-//	def, err := lang.GetDefinitionFrom(reader, "config")
+//	ast, err := lang.ParseString(ctx, `config : { level : "debug" }`)
+//	ns, ok := ast.GetNamespace("config")
 //
 // # Configuration Loader
 //
-// The package includes a Kong configuration loader ([loadNamespace]) that
-// reads aenv language config files and converts them to Kong flag values.
+// The package includes a Kong configuration loader that reads aenv language
+// config files and converts them to Kong flag values.
 //
 // # Logging Options
 //
@@ -58,13 +39,11 @@
 //
 // Profiling is only available when built with the pprof build tag:
 //
-//		go build -tags pprof -o aenv ./cmd/aenv
+//		go build -tags pprof -o aenv
 //
 //	  - --pprof-mode: Enable profiling (allocs, block, clock, cpu, goroutine,
 //	    heap, mem, mutex, thread, trace)
-//	  - --pprof-dir: Set profile output directory (default:
-//
-// ~/.cache/aenv/pprof)
+//	  - --pprof-dir: Set profile output directory
 //
 // # Examples
 //

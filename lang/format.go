@@ -214,13 +214,17 @@ func formatBlock(v *Value, w io.Writer, indent, depth int) error {
 	for i, ns := range v.Entries {
 		// Indent
 		if indent > 0 {
-			if _, err := fmt.Fprint(w, strings.Repeat(" ", (depth+1)*indent)); err != nil {
+			if _, err := fmt.Fprint(
+				w,
+				strings.Repeat(" ", (depth+1)*indent),
+			); err != nil {
 				return err
 			}
 		}
 
 		// Format namespace entry
-		if err := formatNamespace(ns, w, indent, depth+1); err != nil {
+		err := formatNamespace(ns, w, indent, depth+1)
+		if err != nil {
 			return err
 		}
 

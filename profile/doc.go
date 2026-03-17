@@ -30,15 +30,13 @@
 // # Using File-Based Profiling
 //
 // File-based profiling writes profiling data to disk for later analysis. The
-// profiler is configured using the [Profiler] type and started with
-// [Profiler.Start]:
+// profiler is configured using the [Config] type and started with
+// [Config.Start]:
 //
-//	p := profile.Profiler{
-//	    Mode:  "cpu",
-//	    Path:  "/tmp/profiles",
-//	    Quiet: false,
-//	}
-//	ctrl := p.Start()
+//	cfg := profile.Config(func() (string, string, bool) {
+//	    return "cpu", "/tmp/profiles", false
+//	})
+//	ctrl := cfg.Start()
 //	defer ctrl.Stop()
 //
 //	// Application code runs here with profiling enabled

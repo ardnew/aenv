@@ -36,7 +36,7 @@ paths : {
 Namespaces can accept parameters (including variadic) and can be composed of other user-defined namespaces, enabling functional-style composition of groups of environment variables:
 
 ```json
-greet name     : "Hello, " + name;
+greet name             : "Hello, " + name;
 sum   ...nums  : nums[0] + nums[1];
 ```
 

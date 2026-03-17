@@ -148,12 +148,12 @@ func (l Logger) Print(attrs ...slog.Attr) {
 		l.mutex = &sync.RWMutex{}
 	}
 
-	var data []byte
-
 	l.mutex.RLock()
 	format := l.format
 	pretty := l.pretty
 	l.mutex.RUnlock()
+
+	var data []byte
 
 	switch format {
 	case FormatJSON:
@@ -173,14 +173,21 @@ func (l Logger) Print(attrs ...slog.Attr) {
 func printJSON(pretty bool, attrs []slog.Attr) []byte {
 	m := attrsToMap(attrs)
 
-	var data []byte
-	if pretty {
-		data, _ = json.MarshalIndent(m, "", "  ")
-	} else {
-		data, _ = json.Marshal(m)
+	data, err := marshalJSON(pretty, m)
+	if err != nil {
+		return []byte(err.Error() + "\n")
 	}
 
 	return append(data, '\n')
+}
+
+// marshalJSON marshals the value as JSON, optionally with indentation.
+func marshalJSON(pretty bool, v any) ([]byte, error) {
+	if pretty {
+		return json.MarshalIndent(v, "", "  ")
+	}
+
+	return json.Marshal(v)
 }
 
 // attrsToMap recursively converts [slog.Attr] values to a map, handling
@@ -246,9 +253,11 @@ func appendTextValue(buf []byte, v slog.Value) []byte {
 		}
 
 		return append(buf, '}')
-	default:
+	case slog.KindAny, slog.KindLogValuer:
 		return fmt.Appendf(buf, "%v", v.Any())
 	}
+
+	return buf
 }
 
 // TraceContext logs a message at Trace level with the provided context.
@@ -349,10 +358,13 @@ func (l Logger) logContext(
 		return
 	}
 
+	// logContextCallerSkip is the number of stack frames to skip when
+	// recording the call site. The 3 skipped frames are:
+	// 1=runtime.Callers, 2=logContext, 3=public logging method.
+	const logContextCallerSkip = 3
+
 	var pcs [1]uintptr
-	// Skip 3 frames to get to actual caller:
-	// 1=runtime.Callers, 2=logContext, 3=public logging method
-	runtime.Callers(3, pcs[:])
+	runtime.Callers(logContextCallerSkip, pcs[:])
 
 	r := slog.NewRecord(time.Now(), slog.Level(level), msg, pcs[0])
 	r.AddAttrs(attrs...)
