@@ -208,9 +208,10 @@ func childNames(v *lang.Value) []string {
 
 // computeMatches calculates the fuzzy match results for the word at the cursor.
 // It returns the matches (ranked best-first), the candidate list, and the word
-// boundaries. When the current word is empty at the top level, it returns nil
-// matches. When the word is empty after a dot (member access), it returns all
-// children as matches.
+// boundaries. In command mode, empty input returns all commands; after "help",
+// empty input returns all help topics. In expression mode, empty input at the
+// top level returns nil (to keep hint text visible) unless inside a function
+// call. After a dot, all children are returned immediately.
 func (m model) computeMatches() (
 	matches fuzzy.Matches,
 	candidates []string,
@@ -223,10 +224,6 @@ func (m model) computeMatches() (
 	wordStart, wordEnd = ws, we
 
 	if m.mode == modeCtrl {
-		if word == "" {
-			return nil, nil, wordStart, wordEnd
-		}
-
 		// When the first word is already "help" (or "h") and the user is
 		// typing a second word, offer help topic names as candidates.
 		prefix := strings.TrimSpace(input[:ws])
@@ -234,6 +231,17 @@ func (m model) computeMatches() (
 			candidates = helpTopicNames()
 		} else {
 			candidates = ctrlCommands
+		}
+
+		if word == "" {
+			// Return all candidates as unfiltered matches so the user can
+			// browse commands (empty input) or help topics (":help ").
+			matches = make(fuzzy.Matches, len(candidates))
+			for i, c := range candidates {
+				matches[i] = fuzzy.Match{Str: c, Index: i}
+			}
+
+			return matches, candidates, wordStart, wordEnd
 		}
 	} else {
 		parent := parentPath(input, wordStart)
@@ -387,11 +395,12 @@ func buildCandidateEntries(
 	matches fuzzy.Matches,
 	suggIdx int,
 	tabActive bool,
+	showCallHint bool,
 ) []candidateEntry {
 	entries := make([]candidateEntry, len(matches))
 
 	for i, match := range matches {
-		r := renderCandidate(match, tabActive && i == suggIdx)
+		r := renderCandidate(match, tabActive && i == suggIdx, showCallHint)
 		entries[i] = candidateEntry{r, lipgloss.Width(r)}
 	}
 
@@ -484,10 +493,13 @@ func renderCandidateBar(
 	suggIdx int,
 	tabActive bool,
 	width int,
+	showCallHint ...bool,
 ) string {
 	if len(matches) == 0 || width <= 0 {
 		return ""
 	}
+
+	hint := len(showCallHint) == 0 || showCallHint[0]
 
 	const sep = "  "
 
@@ -498,7 +510,7 @@ func renderCandidateBar(
 	leftArrowWidth := lipgloss.Width(leftArrow)
 	rightArrowWidth := lipgloss.Width(rightArrow)
 
-	entries := buildCandidateEntries(matches, suggIdx, tabActive)
+	entries := buildCandidateEntries(matches, suggIdx, tabActive, hint)
 
 	// Determine the visible window.
 	windowStart := 0
@@ -548,8 +560,9 @@ func renderCandidateBar(
 }
 
 // renderCandidate renders a single candidate with matched characters
-// highlighted. Functions are displayed with a "()" suffix.
-func renderCandidate(match fuzzy.Match, selected bool) string {
+// highlighted. When showCallHint is true, functions are displayed with
+// a "()" suffix.
+func renderCandidate(match fuzzy.Match, selected, showCallHint bool) string {
 	baseStyle := suggestionStyle
 	highlightStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("4")).
@@ -580,7 +593,7 @@ func renderCandidate(match fuzzy.Match, selected bool) string {
 	}
 
 	// Add "()" suffix for functions (not applied to actual completion)
-	if isFunction(match.Str) {
+	if showCallHint && isFunction(match.Str) {
 		b.WriteString(baseStyle.Render("()"))
 	}
 
@@ -593,7 +606,7 @@ func formatPreview(ns *lang.Namespace) string {
 
 	// Show parameters if any
 	if len(ns.Params) > 0 {
-		var params []string
+		params := make([]string, 0, len(ns.Params))
 
 		for _, p := range ns.Params {
 			paramName := p.Name
@@ -677,6 +690,11 @@ func (m model) tryTabFinish() (string, bool) {
 
 	if !slices.Contains(cands, word) {
 		return "", false
+	}
+
+	// Command-mode completions are never callable — always space-separated.
+	if m.mode == modeCtrl {
+		return " ", true
 	}
 
 	return tabFinishSuffix(m.ast, input, cursor, word), true

@@ -474,7 +474,12 @@ func getSignature(
 				finalName := segments[len(segments)-1]
 				for _, entry := range val.Entries {
 					if entry.Name == finalName {
-						return formatSignature(funcName, entry.Params), extractParamNames(entry.Params)
+						return formatSignature(
+								funcName,
+								entry.Params,
+							), extractParamNames(
+								entry.Params,
+							)
 					}
 				}
 			}
@@ -677,12 +682,12 @@ func renderSignatureHint(
 	}
 
 	// Parse signature: "funcName(param1, param2, ...)"
-	openParen := strings.Index(signature, "(")
-	if openParen == -1 {
+	before, _, ok := strings.Cut(signature, "(")
+	if !ok {
 		return signatureStyle.Render(signature)
 	}
 
-	funcName := signature[:openParen]
+	funcName := before
 
 	closeParen := strings.LastIndex(signature, ")")
 	if closeParen == -1 {

@@ -46,9 +46,51 @@ const (
 // helpTopic defines a single help topic with its short summary and detailed
 // content.
 type helpTopic struct {
-	name    string // topic identifier (used in :help <topic>)
-	summary string // one-line summary shown in :help overview
-	detail  string // detailed help text shown by :help <topic>
+	name    string      // topic identifier (used in :help <topic>)
+	summary string      // one-line summary shown in :help overview
+	detail  helpDetails // detailed help text shown by :help <topic>
+}
+
+type helpDetails struct {
+	pretty  bool
+	title   string
+	content []struct{ key, value []string }
+}
+
+type slicePairs[T any] [][2][]T
+
+func makeHelpDetails(title string, pairs slicePairs[string]) helpDetails {
+	content := make([]struct{ key, value []string }, len(pairs))
+	for i, p := range pairs {
+		content[i] = struct{ key, value []string }{key: p[0], value: p[1]}
+	}
+
+	return helpDetails{
+		title:   title,
+		content: content,
+	}
+}
+
+func (h helpDetails) String() string {
+	var b, l, r strings.Builder
+	fmt.Fprintf(&b, " %s\n\n", h.title)
+
+	maxL := 0
+
+	for _, item := range h.content {
+		r.WriteString(strings.Join(item.value, "\n") + "\n")
+		key := strings.Join(item.key, " ")
+		l.WriteString(key + strings.Repeat("\n", len(item.value)))
+		maxL = max(maxL, strings.IndexRune(key, '\n'))
+	}
+
+	keyStyle := lipgloss.NewStyle().Bold(h.pretty).Margin(0, 3, 0, 4)
+
+	b.WriteString(
+		lipgloss.JoinHorizontal(0, keyStyle.Render(l.String()), r.String()),
+	)
+
+	return b.String()
 }
 
 // helpTopics defines the available help topics in display order.
@@ -56,51 +98,67 @@ var helpTopics = []helpTopic{
 	{
 		name:    "keys",
 		summary: "Keyboard shortcuts and keybindings",
-		detail: `Keybindings:
-  [Esc]     Toggle between evaluation and command modes
-  [Tab]     Cycle forward through completions ([Shift] reverse)
-  [↑][↓]    Navigate history ([Shift] current mode, [Alt] command mode)
-  [Ctrl-L]  Clear screen
-  [Ctrl-C]  Clear input (quit if input is empty)
-  [Ctrl-D]  Quit REPL`,
+		detail: makeHelpDetails(
+			"Keybindings:",
+			slicePairs[string]{
+				{{"Esc"}, {"Toggle evaluation or command mode"}},
+				{{"Tab"}, {"Cycle completions forward"}},
+				{{"Shift+Tab"}, {"Cycle completions backward"}},
+				{{"↑ / ↓"}, {"Navigate all history", " (mode follows entry)"}},
+				{{"Shift+↑/↓"}, {"Navigate history within current mode only"}},
+				{
+					{"Alt+↑/↓"},
+					{
+						"Navigate command history",
+						" (automatically restores previous mode)",
+					},
+				},
+				{{"Ctrl+L"}, {"Clear screen"}},
+				{{"Ctrl+C"}, {"Clear input", " (quit if input is empty)"}},
+				{{"Ctrl+D"}, {"Quit", " (discards input and signals EOF)"}},
+			},
+		),
 	},
 	{
 		name:    "commands",
 		summary: "Available REPL commands",
-		detail: `Commands:
-  help [topic]  Show help overview, or detail on a topic
-  list          List top-level namespaces
-  edit          Edit source in external $EDITOR
-  clear         Clear screen
-  quit          Exit REPL
-
-Short aliases: h, l, e, c, q`,
+		detail: makeHelpDetails(
+			"Commands  (switch to command mode with Esc, or type : alone in eval mode):",
+			slicePairs[string]{
+				{{"help"}, {"Show help overview and available topics"}},
+				{{"help", "<topic>"}, {"Show detailed help for a specific topic"}},
+				{{"list"}, {"List all top-level namespaces"}},
+				{
+					{"edit"},
+					{
+						"Open all sources combined in $EDITOR",
+						" (recompiles and reloads on save,",
+						"  or resumes editing on parse error)",
+					},
+				},
+				{{"clear"}, {"Clear the screen"}},
+				{{"quit"}, {"Exit the REPL"}},
+			},
+		),
 	},
 	{
 		name:    "eval",
-		summary: "Expression evaluation syntax",
-		detail: `Evaluation:
-  outer.inner         Simple namespace member access
-  outer(a, b).inner   Parameterized namespace member access
-  param[index]        Variadic parameter access
-
-  Auto-completion hints reveal all available in-scope identifiers.
-  Function signatures are hinted when the cursor is inside a function call.`,
+		summary: "Expression evaluation and syntax",
+		detail: makeHelpDetails(
+			"Evaluation:",
+			slicePairs[string]{},
+		),
 	},
 	{
-		name:    "nav",
-		summary: "Mode switching and history navigation",
-		detail: `Navigation:
-  Type : on an empty line to enter command mode.
-  Press Esc to toggle between eval and command modes.
-
-History:
-  [↑][↓]          Navigate across all history (mode switches automatically)
-  [Shift+↑][↓]    Navigate within current mode only
-  [Alt+↑][↓]      Navigate command history (restores current mode on exit)
-
-Exiting:
-  Press Ctrl+C on an empty line or Ctrl+D to exit.`,
+		name:    "modes",
+		summary: "Evaluation and command modes",
+		detail: makeHelpDetails(
+			"Modes:",
+			slicePairs[string]{
+				{{"➜ eval"}, {"Evaluate expressios"}},
+				{{" :command"}, {"Command and control the REPL"}},
+			},
+		),
 	},
 }
 
@@ -119,7 +177,7 @@ func helpOverview() string {
 	var b strings.Builder
 
 	b.WriteString(
-		"\nType :help <topic> for details on any topic listed below.\n\n",
+		"\nAvailable topics  (type :help <topic> for details):\n\n",
 	)
 
 	// Find max topic name length for alignment.
@@ -132,7 +190,7 @@ func helpOverview() string {
 
 	for _, t := range helpTopics {
 		pad := strings.Repeat(" ", maxLen-len(t.name)+2)
-		b.WriteString(fmt.Sprintf("  %s%s%s\n", t.name, pad, t.summary))
+		fmt.Fprintf(&b, "  %s%s%s\n", t.name, pad, t.summary)
 	}
 
 	return b.String()
@@ -145,18 +203,16 @@ func helpDetail(topic string) string {
 
 	for _, t := range helpTopics {
 		if t.name == topic {
-			return "\n" + t.detail + "\n"
+			return "\n" + t.detail.String()
 		}
 	}
 
 	var b strings.Builder
 
-	b.WriteString(
-		fmt.Sprintf("Unknown help topic: %s\n\nAvailable topics:\n", topic),
-	)
+	fmt.Fprintf(&b, "Unknown help topic: %s\n\nAvailable topics:\n", topic)
 
 	for _, t := range helpTopics {
-		b.WriteString(fmt.Sprintf("  %s\n", t.name))
+		fmt.Fprintf(&b, "  %s\n", t.name)
 	}
 
 	return b.String()
@@ -325,7 +381,7 @@ func newModel(
 func (m model) Init() tea.Cmd {
 	banner := hintStyle.Render(
 		fmt.Sprintf("%s %s", pkg.Name, strings.TrimSpace(pkg.Version)),
-	) + " " + hintStyle.Render("\u2014 type :help for usage")
+	) + " " + hintStyle.Render("\u2014 :help for commands  \u00b7  Esc or : to switch modes")
 
 	return tea.Batch(textinput.Blink, tea.Println(banner))
 }
@@ -425,9 +481,9 @@ func (m model) View() string {
 		// Empty or whitespace-only input: show hint.
 		var hint string
 		if m.mode == modeEval {
-			hint = "Type an expression or press Esc for commands"
+			hint = "Enter an expression to evaluate  (Esc — toggle command mode)"
 		} else {
-			hint = "Type: help [topic], list, edit, clear, quit (press Esc to return)"
+			hint = "help  list  edit  clear  quit  (Esc — return to eval mode)"
 		}
 
 		b.WriteString(hintStyle.Render(hint))
@@ -443,7 +499,7 @@ func (m model) View() string {
 
 		if showCandidates {
 			bar := renderCandidateBar(
-				m.matches, m.suggIdx, m.tabActive, m.width,
+				m.matches, m.suggIdx, m.tabActive, m.width, true,
 			)
 			b.WriteString(bar)
 			b.WriteString("\n")
@@ -455,7 +511,7 @@ func (m model) View() string {
 				b.WriteString("\n")
 			} else if len(m.matches) > 0 {
 				bar := renderCandidateBar(
-					m.matches, m.suggIdx, m.tabActive, m.width,
+					m.matches, m.suggIdx, m.tabActive, m.width, true,
 				)
 				b.WriteString(bar)
 				b.WriteString("\n")
@@ -468,6 +524,7 @@ func (m model) View() string {
 		// Render horizontal candidate bar.
 		bar := renderCandidateBar(
 			m.matches, m.suggIdx, m.tabActive, m.width,
+			m.mode == modeEval,
 		)
 		b.WriteString(bar)
 		b.WriteString("\n")
@@ -552,6 +609,12 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 	case tea.KeyShiftDown:
 		return m.historyNextInMode()
+
+	case tea.KeyBackspace:
+		// Backspace at column 0 in command mode returns to eval mode.
+		if m.mode == modeCtrl && m.input.Position() == 0 {
+			return m.switchToMode(modeEval)
+		}
 
 	case tea.KeyEsc:
 		if m.tabActive {
@@ -1185,9 +1248,7 @@ func (m model) listNamespaces() string {
 
 	for _, e := range entries {
 		pad := strings.Repeat(" ", maxLen-len(e.name)+2)
-		b.WriteString(
-			fmt.Sprintf("  %s%s%s\n", e.name, pad, hintStyle.Render(e.preview)),
-		)
+		fmt.Fprintf(&b, "  %s%s%s\n", e.name, pad, hintStyle.Render(e.preview))
 	}
 
 	return b.String()

@@ -123,7 +123,9 @@ func (c *editASTCommand) Run() error {
 
 			// Compare canonical representations to detect no-op edits.
 			var newBuf bytes.Buffer
-			if fmtErr := newAST.Format(ctx, &newBuf, 2); fmtErr == nil {
+
+			fmtErr := newAST.Format(ctx, &newBuf, 2)
+			if fmtErr == nil {
 				c.unchanged = newBuf.String() == content
 			}
 
