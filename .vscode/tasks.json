@@ -13,7 +13,7 @@
         "cwd": "${workspaceFolder}",
         "env": {
           "TMPDIR": "",
-          "GOEXPERIMENT": "greenteagc",
+          "GOEXPERIMENT": "goroutineleakprofile",
         },
       },
       "presentation": {

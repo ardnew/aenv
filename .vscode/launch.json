@@ -22,7 +22,7 @@
       "internalConsoleOptions": "neverOpen",
       "env": {
         "TMPDIR": "",
-        "GOEXPERIMENT": "greenteagc",
+        "GOEXPERIMENT": "goroutineleakprofile",
       },
       "args": [
       ],
@@ -49,7 +49,7 @@
       "internalConsoleOptions": "neverOpen",
       "env": {
         "TMPDIR": "",
-        "GOEXPERIMENT": "greenteagc",
+        "GOEXPERIMENT": "goroutineleakprofile",
       },
       "args": [
         "--log-level=info",
