@@ -84,7 +84,7 @@ func (i *Init) buildAST(ctx context.Context) *lang.AST {
 
 	var entries []*lang.Namespace
 
-	prefixIgnore := []string{"help", profile.Tag}
+	prefixIgnore := []string{"help", "verbose", "quiet", profile.Tag}
 
 	for _, flag := range ktx.Model.Flags {
 		if flag.Hidden || slices.ContainsFunc(prefixIgnore, func(s string) bool {
@@ -142,66 +142,53 @@ func (i *Init) flagValue(ctx context.Context, name string) *lang.Value {
 		return lang.NewExpr(fmt.Sprint(v))
 
 	case []string:
-		if len(v) == 0 {
-			return nil
-		}
-
-		entries := make([]*lang.Namespace, len(v))
-		for i, s := range v {
-			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.Quote(s)))
-		}
-
-		return lang.NewBlock(entries...)
+		return sliceExpr(v, strconv.Quote)
 
 	case []int:
-		if len(v) == 0 {
-			return nil
-		}
-
-		entries := make([]*lang.Namespace, len(v))
-		for i, n := range v {
-			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.Itoa(n)))
-		}
-
-		return lang.NewBlock(entries...)
+		return sliceExpr(v, strconv.Itoa)
 
 	case []int64:
-		if len(v) == 0 {
-			return nil
-		}
+		return sliceExpr(v, func(n int64) string {
+			return strconv.FormatInt(n, 10)
+		})
 
-		entries := make([]*lang.Namespace, len(v))
-		for i, n := range v {
-			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.FormatInt(n, 10)))
-		}
+	case []uint:
+		return sliceExpr(v, func(n uint) string {
+			return strconv.FormatUint(uint64(n), 10)
+		})
 
-		return lang.NewBlock(entries...)
+	case []uint64:
+		return sliceExpr(v, func(n uint64) string {
+			return strconv.FormatUint(n, 10)
+		})
+
+	case []float32:
+		return sliceExpr(v, func(f float32) string {
+			return strconv.FormatFloat(float64(f), 'f', -1, 32)
+		})
 
 	case []float64:
-		if len(v) == 0 {
-			return nil
-		}
-
-		entries := make([]*lang.Namespace, len(v))
-		for i, n := range v {
-			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(fmt.Sprint(n)))
-		}
-
-		return lang.NewBlock(entries...)
+		return sliceExpr(v, func(f float64) string {
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		})
 
 	case []bool:
-		if len(v) == 0 {
-			return nil
-		}
-
-		entries := make([]*lang.Namespace, len(v))
-		for i, b := range v {
-			entries[i] = lang.NewNamespace(strconv.Itoa(i), nil, lang.NewExpr(strconv.FormatBool(b)))
-		}
-
-		return lang.NewBlock(entries...)
+		return sliceExpr(v, strconv.FormatBool)
 
 	default:
 		return lang.NewExpr(strconv.Quote(fmt.Sprint(v)))
 	}
+}
+
+func sliceExpr[T any](v []T, toString func(T) string) *lang.Value {
+	if len(v) == 0 {
+		return nil
+	}
+
+	elems := make([]string, len(v))
+	for i, val := range v {
+		elems[i] = toString(val)
+	}
+
+	return lang.NewExpr("[" + strings.Join(elems, ", ") + "]")
 }
