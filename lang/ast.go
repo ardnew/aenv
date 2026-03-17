@@ -141,17 +141,6 @@ func (a *AST) All() iter.Seq[*Namespace] {
 	}
 }
 
-// mergedNamespaces returns the deduplicated/merged top-level namespaces,
-// computing and caching the result on first call or after invalidation.
-func (a *AST) mergedNamespaces() []*Namespace {
-	if !a.mergedValid {
-		a.merged = mergeEntries(a.Namespaces)
-		a.mergedValid = true
-	}
-
-	return a.merged
-}
-
 // RemoveNamespace removes all namespaces with the given name from the AST.
 // It returns true if at least one namespace was removed.
 func (a *AST) RemoveNamespace(name string) bool {
@@ -211,6 +200,17 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 	a.mergedValid = false
 }
 
+// mergedNamespaces returns the deduplicated/merged top-level namespaces,
+// computing and caching the result on first call or after invalidation.
+func (a *AST) mergedNamespaces() []*Namespace {
+	if !a.mergedValid {
+		a.merged = mergeEntries(a.Namespaces)
+		a.mergedValid = true
+	}
+
+	return a.merged
+}
+
 // buildIndex creates the namespace lookup index for O(1) access.
 // This is called after parsing is complete.
 func (a *AST) buildIndex() {
@@ -222,36 +222,6 @@ func (a *AST) buildIndex() {
 	for _, ns := range a.Namespaces {
 		a.index[ns.Name] = ns
 	}
-}
-
-// resolvedNamespace returns the effective namespace definition for the given
-// name by merging all block definitions. When multiple definitions exist and
-// all have block values, their entries are merged recursively (later entries
-// shadow earlier ones by name). Otherwise the last definition wins entirely.
-func (a *AST) resolvedNamespace(name string) (*Namespace, bool) {
-	var defs []*Namespace
-
-	for _, ns := range a.Namespaces {
-		if ns.Name == name {
-			defs = append(defs, ns)
-		}
-	}
-
-	if len(defs) == 0 {
-		return nil, false
-	}
-
-	if len(defs) == 1 {
-		return defs[0], true
-	}
-
-	merged := mergeEntries(defs)
-	if len(merged) != 1 {
-		// All share the same name, so mergeEntries produces exactly one.
-		return defs[len(defs)-1], true
-	}
-
-	return merged[0], true
 }
 
 // mergeEntries takes a list of namespace entries that may contain duplicate

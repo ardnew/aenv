@@ -446,11 +446,52 @@ func TestEvaluateNamespace_ParameterCountMismatch(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing parameter, got nil")
 	}
+}
 
-	// Too many arguments
-	_, err = ast.EvaluateNamespace(context.Background(), "greet", []string{"Alice", "Bob"})
-	if err == nil {
-		t.Error("expected error for too many parameters, got nil")
+func TestEvaluateNamespace_ExtraArgsIgnored(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		nsName   string
+		args     []string
+		expected any
+	}{
+		{
+			name:     "one_param_two_args",
+			input:    `greet name : "Hello, " + name`,
+			nsName:   "greet",
+			args:     []string{"Alice", "Bob"},
+			expected: "Hello, Alice",
+		},
+		{
+			name:     "no_param_extra_arg",
+			input:    `x : 42`,
+			nsName:   "x",
+			args:     []string{"extra"},
+			expected: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ast, err := ParseString(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateNamespace(context.Background(), tt.nsName, tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
 	}
 }
 
@@ -534,6 +575,90 @@ func TestEvaluateExpr_FunctionSignatureInError(t *testing.T) {
 	}
 }
 
+func TestEvaluateExpr_BuiltinAsVariable(t *testing.T) {
+	t.Run("bare builtin returns FuncRef", func(t *testing.T) {
+		names := []string{"now", "len", "upper"}
+		for _, name := range names {
+			t.Run(name, func(t *testing.T) {
+				ast, err := ParseString(context.Background(), "")
+				if err != nil {
+					t.Fatalf("parse error: %v", err)
+				}
+
+				result, err := ast.EvaluateExpr(context.Background(), name)
+				if err != nil {
+					t.Fatalf("evaluate error: %v", err)
+				}
+
+				ref, ok := result.(*FuncRef)
+				if !ok {
+					t.Fatalf("expected *FuncRef, got %T (%v)", result, result)
+				}
+
+				if ref.Name != name {
+					t.Errorf("Name: expected %q, got %q", name, ref.Name)
+				}
+			})
+		}
+	})
+
+	t.Run("let binding calls builtin", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			source string
+			want   any
+		}{
+			{
+				name:   "upper via let",
+				source: `let x = upper; x("hello")`,
+				want:   "HELLO",
+			},
+			{
+				name:   "len via let",
+				source: `let x = len; x("abc")`,
+				want:   3,
+			},
+		}
+
+		ast, err := ParseString(context.Background(), "")
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result, err := ast.EvaluateExpr(context.Background(), tt.source)
+				if err != nil {
+					t.Fatalf("evaluate error: %v", err)
+				}
+
+				// expr-lang may return int or int64; compare loosely.
+				switch want := tt.want.(type) {
+				case string:
+					if result != want {
+						t.Errorf("expected %q, got %v (%T)", want, result, result)
+					}
+				case int:
+					switch got := result.(type) {
+					case int:
+						if got != want {
+							t.Errorf("expected %d, got %d", want, got)
+						}
+					case int64:
+						if got != int64(want) {
+							t.Errorf("expected %d, got %d", want, got)
+						}
+					default:
+						t.Errorf("expected int-like, got %T (%v)", result, result)
+					}
+				default:
+					t.Errorf("unhandled want type %T", tt.want)
+				}
+			})
+		}
+	})
+}
+
 func TestEvaluateExpr_FunctionIdentifier_ReturnsFuncRef(t *testing.T) {
 	input := `add x y : x + y`
 
@@ -560,6 +685,133 @@ func TestEvaluateExpr_FunctionIdentifier_ReturnsFuncRef(t *testing.T) {
 	if ref.Signature != "add(x, y)" {
 		t.Errorf("Signature: expected %q, got %q", "add(x, y)", ref.Signature)
 	}
+}
+
+func TestEvaluateExpr_NamespaceStoresFunction(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string // aenv source
+		expr   string // expression to evaluate
+		check  func(t *testing.T, result any)
+	}{
+		{
+			name:  "namespace stores upper",
+			input: `mynow : now`,
+			expr:  `mynow()`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				if result == nil {
+					t.Fatal("expected non-nil time result")
+				}
+			},
+		},
+		{
+			name:  "namespace stores upper function",
+			input: `up : upper`,
+			expr:  `up("hello")`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				if result != "HELLO" {
+					t.Errorf("expected %q, got %v", "HELLO", result)
+				}
+			},
+		},
+		{
+			name:  "namespace stores user-defined function",
+			input: `add x y : x + y; a : add`,
+			expr:  `a(1, 2)`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				switch v := result.(type) {
+				case int:
+					if v != 3 {
+						t.Errorf("expected 3, got %d", v)
+					}
+				case int64:
+					if v != 3 {
+						t.Errorf("expected 3, got %d", v)
+					}
+				default:
+					t.Errorf("expected int-like, got %T (%v)", result, result)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, err := ParseString(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateExpr(context.Background(), tt.expr)
+			if err != nil {
+				t.Fatalf("evaluate error: %v", err)
+			}
+
+			tt.check(t, result)
+		})
+	}
+}
+
+func TestEvaluateExpr_FunctionPassthrough(t *testing.T) {
+	t.Run("fs.cwd stored in namespace", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `f : fs.cwd`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `f()`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		s, ok := result.(string)
+		if !ok {
+			t.Fatalf("expected string, got %T (%v)", result, result)
+		}
+
+		if s == "" {
+			t.Error("expected non-empty cwd string")
+		}
+	})
+
+	t.Run("mung stored in namespace returns FuncRef", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `f : mung`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `f`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		ref, ok := result.(*FuncRef)
+		if !ok {
+			t.Fatalf("expected *FuncRef, got %T (%v)", result, result)
+		}
+
+		if ref.Name != "f" {
+			t.Errorf("Name: expected %q, got %q", "f", ref.Name)
+		}
+	})
+
+	t.Run("function inside a block", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `id : { up : upper }`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `id.up("hi")`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		if result != "HI" {
+			t.Errorf("expected %q, got %v", "HI", result)
+		}
+	})
 }
 
 func TestValidateNamespaces(t *testing.T) {

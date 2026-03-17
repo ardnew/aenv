@@ -4,6 +4,7 @@ import "unicode"
 
 func scanIdentifiers(source string) []string {
 	var ids []string
+
 	i := 0
 
 	for i < len(source) {
@@ -15,8 +16,10 @@ func scanIdentifiers(source string) []string {
 				if source[i] == '\\' {
 					i++
 				}
+
 				i++
 			}
+
 			if i < len(source) {
 				i++
 			}
@@ -53,11 +56,18 @@ func scanIdentifiers(source string) []string {
 			"map", "filter", "count", "sum", "reduce",
 			"first", "last", "take", "trim", "split",
 			"upper", "lower", "repeat", "replace",
-			"min", "max", "abs", "ceil", "floor",
+			"min", "max", "abs", "ceil", "floor", "round",
 			"toJSON", "fromJSON", "now", "date", "duration",
 			"type", "sprintf", "toPairs", "fromPairs",
 			"keys", "values", "sort", "sortBy", "reverse",
-			"flatten", "unique", "groupBy", "join":
+			"flatten", "unique", "groupBy", "join",
+			"trimPrefix", "trimSuffix", "splitAfter",
+			"indexOf", "lastIndexOf", "hasPrefix", "hasSuffix",
+			"mean", "median", "toBase64", "fromBase64", "timezone",
+			"get", "uniq", "concat",
+			"find", "findIndex", "findLast", "findLastIndex",
+			"bitand", "bitor", "bitxor", "bitnand",
+			"bitshl", "bitshr", "bitushr", "bitnot":
 			continue
 		}
 

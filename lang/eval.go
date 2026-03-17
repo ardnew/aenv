@@ -172,16 +172,6 @@ func (a *AST) EvaluateNamespace(
 
 	ectx.visible = merged[:nsIndex+1]
 
-	// Check if namespace is parameterized
-	if len(ns.Params) == 0 && len(args) > 0 {
-		return nil, ErrParameterCount.
-			With(
-				slog.String("name", name),
-				slog.Int("expected", 0),
-				slog.Int("got", len(args)),
-			)
-	}
-
 	// Validate argument count
 	var variadic bool
 	if len(ns.Params) > 0 {
@@ -198,7 +188,7 @@ func (a *AST) EvaluateNamespace(
 					slog.Int("got", len(args)),
 				)
 		}
-	} else if len(args) != len(ns.Params) {
+	} else if len(args) < len(ns.Params) {
 		return nil, ErrParameterCount.
 			With(
 				slog.String("name", name),
@@ -394,6 +384,7 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 		if ctx.needed == nil {
 			ctx.needed = make(map[string]struct{}, len(ids))
 		}
+
 		for _, id := range ids {
 			ctx.needed[id] = struct{}{}
 		}
@@ -403,7 +394,8 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	env := ctx.buildRuntimeEnv()
 	defer returnRuntimeEnv(env)
 
-	if ctx.logger.Logger != nil && ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+	if ctx.logger.Logger != nil &&
+		ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
 		ctx.logger.TraceContext(
 			ctx.get(),
 			"eval expr",
@@ -437,11 +429,6 @@ func (ctx *evalContext) evaluateExpr(v *Value) (any, error) {
 	if err != nil {
 		return nil, enhanceFunctionError(err, source, ctx.ast).
 			With(slog.String("source", source))
-	}
-
-	// If result is a function, return nil (like expr-lang builtins)
-	if isFunction(result) {
-		result = nil
 	}
 
 	ctx.logger.TraceContext(
@@ -513,7 +500,8 @@ func (ctx *evalContext) evaluateBlock(v *Value) (map[string]any, error) {
 		result[ns.Name] = evaluated
 	}
 
-	if ctx.logger.Logger != nil && ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
+	if ctx.logger.Logger != nil &&
+		ctx.logger.Enabled(ctx.get(), slog.Level(log.LevelTrace)) {
 		ctx.logger.TraceContext(
 			ctx.get(),
 			"block result",
@@ -775,6 +763,7 @@ func (ctx *evalContext) resolveForEnv(v *Value) any {
 	}
 
 	ctx.resolved[v] = result
+
 	return result
 }
 
@@ -968,9 +957,9 @@ func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 	var funcName string
 
 	// Pattern: "cannot call ... (type ...)"
-	if idx := strings.Index(errMsg, "cannot call"); idx >= 0 {
+	if _, after, ok := strings.Cut(errMsg, "cannot call"); ok {
 		// Extract identifier after "cannot call"
-		after := errMsg[idx+len("cannot call"):]
+		after := after
 		if fields := strings.Fields(after); len(fields) > 0 {
 			funcName = strings.Trim(fields[0], "'\"()")
 		}
@@ -978,8 +967,8 @@ func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 
 	// Pattern: "unknown name ... ()"
 	if funcName == "" {
-		if idx := strings.Index(errMsg, "unknown name"); idx >= 0 {
-			after := errMsg[idx+len("unknown name"):]
+		if _, after, ok := strings.Cut(errMsg, "unknown name"); ok {
+			after := after
 			if fields := strings.Fields(after); len(fields) > 0 {
 				funcName = strings.Trim(fields[0], "'\"()")
 			}
@@ -990,8 +979,8 @@ func enhanceFunctionError(err error, _ string, ast *AST) *Error {
 	// or "not enough arguments ... (expected ...)"
 	if funcName == "" {
 		for _, pattern := range []string{"arguments to", "arguments for"} {
-			if idx := strings.Index(errMsg, pattern); idx >= 0 {
-				after := errMsg[idx+len(pattern):]
+			if _, after, ok := strings.Cut(errMsg, pattern); ok {
+				after := after
 				if fields := strings.Fields(after); len(fields) > 0 {
 					funcName = strings.Trim(fields[0], "'\"()")
 				}

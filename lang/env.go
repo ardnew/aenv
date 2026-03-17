@@ -9,6 +9,7 @@ package lang
 
 import (
 	"bufio"
+	"log/slog"
 	"maps"
 	"os"
 	"os/user"
@@ -16,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/expr-lang/expr/builtin"
 
 	"github.com/ardnew/mung"
 )
@@ -37,34 +40,81 @@ func makeEnvCache() map[string]any {
 	return maps.Clone(builtinEnv())
 }
 
+// builtinEnvExtraCapacity is the number of extra map slots to allocate
+// beyond the expr-lang built-in count for aenv-specific entries.
+const builtinEnvExtraCapacity = 10
+
 // builtinEnv returns the shared immutable built-in environment.
 // Callers MUST NOT modify the returned map.
 func builtinEnv() map[string]any {
 	envCacheOnce.Do(func() {
-		envCache = map[string]any{
-			// System information (struct/string values).
-			"target":   getTarget(),
-			"platform": getPlatform(),
-			"hostname": getHostname(),
-			"user":     getUser(),
-			"shell":    getShell(),
+		envCache = make(
+			map[string]any,
+			len(builtin.Builtins)+builtinEnvExtraCapacity,
+		)
 
-			// Filesystem functions
-			"fs": map[string]any{
-				"cwd":  fsCwd,
-				"abs":  fsAbs,
-				"cat":  fsCat,
-				"rel":  fsRel,
-				"stat": fsStat,
-			},
-
-			// PATH-like string manipulation via mung.
-			"mung":   mungPrefix,
-			"mungif": mungPrefixIf,
+		// Lower precedence: expr-lang builtins (now, len, upper, …).
+		// These are added first so aenv's own entries can overwrite them.
+		for _, f := range builtin.Builtins {
+			if fn := wrapBuiltinFunc(f); fn != nil {
+				envCache[f.Name] = fn
+			}
 		}
+
+		// Higher precedence: aenv builtins overwrite same-named entries.
+
+		// System information (struct/string values).
+		envCache["target"] = getTarget()
+		envCache["platform"] = getPlatform()
+		envCache["hostname"] = getHostname()
+		envCache["user"] = getUser()
+		envCache["shell"] = getShell()
+
+		// Filesystem functions.
+		envCache["fs"] = map[string]any{
+			"cwd":  fsCwd,
+			"abs":  fsAbs,
+			"cat":  fsCat,
+			"rel":  fsRel,
+			"stat": fsStat,
+		}
+
+		// PATH-like string manipulation via mung.
+		envCache["mung"] = mungPrefix
+		envCache["mungif"] = mungPrefixIf
 	})
 
 	return envCache
+}
+
+// wrapBuiltinFunc wraps an expr-lang [builtin.Function] into a uniform
+// func(...any) (any, error) suitable for the runtime environment.
+func wrapBuiltinFunc(f *builtin.Function) func(...any) (any, error) {
+	switch {
+	case f.Func != nil:
+		return f.Func
+	case f.Safe != nil:
+		safe := f.Safe
+
+		return func(args ...any) (any, error) {
+			result, _, err := safe(args...)
+
+			return result, err
+		}
+	case f.Fast != nil:
+		fast := f.Fast
+
+		return func(args ...any) (any, error) {
+			if len(args) != 1 {
+				return nil, ErrArgumentCount.
+					With(slog.String("name", f.Name))
+			}
+
+			return fast(args[0]), nil
+		}
+	default:
+		return nil
+	}
 }
 
 // BuiltinEnvCache returns a copy of the built-in environment cache.
