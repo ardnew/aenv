@@ -146,7 +146,100 @@ var helpTopics = []helpTopic{
 		summary: "Expression evaluation and syntax",
 		detail: makeHelpDetails(
 			"Evaluation:",
-			slicePairs[string]{},
+			slicePairs[string]{
+				{{"Syntax"}, {""}},
+				{{"name : expr"}, {"Define a namespace with an expression value"}},
+				{{"name : { ... }"}, {"Define a block (entries separated by ;)"}},
+				{{"fn a b : expr"}, {"Parameterized namespace (callable as fn(a, b))"}},
+				{{"fn ...xs : expr"}, {"Variadic parameter (collects remaining args)"}},
+				{{"# or //"}, {"Line comment"}},
+				{{"/* ... */"}, {"Block comment"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Values"}, {""}},
+				{
+					{"42, 3.14, 0xff"},
+					{"Number literals (int, float, hex, octal, binary)"},
+				},
+				{{"\"s\", 's', `s`"}, {"String literals (double, single, backtick)"}},
+				{{"true, false, nil"}, {"Boolean and nil literals"}},
+				{{"[1, 2, 3]"}, {"Array literal"}},
+				{{`{"k": "v"}`}, {"Map literal"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Operators"}, {""}},
+				{{"+ - * / %"}, {"Arithmetic"}},
+				{{"== != < <= > >="}, {"Comparison"}},
+				{{"and or not (&&, ||, !)"}, {"Logical"}},
+				{{"x ? y : z"}, {"Ternary conditional"}},
+				{{"v in arr"}, {"Membership test"}},
+				{{"a[0], a[1:3]"}, {"Indexing and slicing"}},
+				{{"m.key, m[\"key\"]"}, {"Member access"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Builtins"}, {""}},
+				{
+					{"target.os, target.arch"},
+					{"Host target (GNU naming: x86_64, aarch64)"},
+				},
+				{
+					{"platform.os, platform.arch"},
+					{"Host platform (Go naming: amd64, arm64)"},
+				},
+				{{"hostname"}, {"System hostname"}},
+				{
+					{"user.username, user.homeDir"},
+					{"Current user info (.name, .uid, .gid)"},
+				},
+				{{"shell"}, {"Current shell path"}},
+				{{"env.HOME, env[\"PATH\"]"}, {"Process environment variables"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Filesystem"}, {""}},
+				{{"fs.cwd()"}, {"Current working directory"}},
+				{{"fs.abs(path)"}, {"Absolute path"}},
+				{{"fs.cat(p1, p2, ...)"}, {"Join path segments"}},
+				{{"fs.rel(from, to)"}, {"Relative path"}},
+				{{"fs.stat(path)"}, {"File info (.name, .size, .mode, .perms, .type)"}},
+				{
+					{""},
+					{""},
+				},
+				{{"PATH Helpers"}, {""}},
+				{{"mung(key, sep, ...pfx)"}, {"Prepend to a path-like variable"}},
+				{{"mungif(key, sep, pred, ...pfx)"}, {"Conditional prepend"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Common Functions"}, {""}},
+				{{"len, string, int, float"}, {"Length, type conversion"}},
+				{{"upper, lower, trim"}, {"String case and whitespace"}},
+				{{"split, join, replace"}, {"String manipulation"}},
+				{{"contains, startsWith, endsWith"}, {"String predicates"}},
+				{{"sort, reverse, unique, flatten"}, {"Array operations"}},
+				{{"map, filter, count, sum"}, {"Array higher-order functions"}},
+				{{"min, max, abs, ceil, floor"}, {"Math functions"}},
+				{{"keys, values"}, {"Map introspection"}},
+				{{"toJSON, fromJSON"}, {"JSON conversion"}},
+				{{"sprintf(fmt, args...)"}, {"Formatted string output"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Scoping"}, {""}},
+				{{"(inner → outer)"}, {"Params > block locals > top-level > builtins"}},
+				{{"block entries"}, {"Forward references not allowed within blocks"}},
+				{{"duplicate names"}, {"Blocks merge, expressions: last wins"}},
+			},
 		),
 	},
 	{
@@ -335,7 +428,9 @@ func Run(
 
 	history := NewHistory(filepath.Join(cacheDir, baseHistory))
 	if err := history.Load(); err != nil {
-		fmt.Printf("Warning: could not load history: %v\n", err)
+		logger.WarnContext(ctx, "could not load history",
+			slog.String("error", err.Error()),
+		)
 	}
 
 	logger.TraceContext(
@@ -379,9 +474,9 @@ func newModel(
 }
 
 func (m model) Init() tea.Cmd {
-	banner := hintStyle.Render(
-		fmt.Sprintf("%s %s", pkg.Name, strings.TrimSpace(pkg.Version)),
-	) + " " + hintStyle.Render("\u2014 :help for commands  \u00b7  Esc or : to switch modes")
+	banner := resultStyle.Render(
+		fmt.Sprintf("%s version %s", pkg.Name, strings.TrimSpace(pkg.Version)),
+	)
 
 	return tea.Batch(textinput.Blink, tea.Println(banner))
 }
@@ -479,11 +574,17 @@ func (m model) View() string {
 
 	case strings.TrimSpace(input) == "":
 		// Empty or whitespace-only input: show hint.
+		escKey := suggestionStyle.Render(`Esc`)
+
 		var hint string
 		if m.mode == modeEval {
-			hint = "Enter an expression to evaluate  (Esc — toggle command mode)"
+			hint = fmt.Sprintf(
+				"Enter an expression to evaluate  •  %s toggle command mode",
+				escKey,
+			)
 		} else {
-			hint = "help  list  edit  clear  quit  (Esc — return to eval mode)"
+			hint = strings.Join(ctrlCommands, "  ") +
+				fmt.Sprintf("  •  %s return to eval mode", escKey)
 		}
 
 		b.WriteString(hintStyle.Render(hint))
