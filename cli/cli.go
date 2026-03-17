@@ -10,17 +10,23 @@ import (
 	"github.com/ardnew/aenv/pkg"
 )
 
-// CLI is the top-level command-line interface for aenv.
+// CLI is the top-level command-line interface for aenv,
+// containing global flags and subcommands.
 type CLI struct {
-	Log   logConfig        `embed:"" group:"log"   prefix:"log-"`
-	Pprof pprofConfig      `embed:"" group:"pprof" prefix:"pprof-"`
-	Ver   kong.VersionFlag `                                       hidden:""`
+	Var kong.VersionFlag `hidden:""`
+
+	Log   logConfig   `embed:"" group:"log"   prefix:"log-"`
+	Pprof pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
+
+	Verbose int  `help:"Increment log verbosity"           short:"v" type:"counter"`
+	Quiet   bool `help:"Suppress all output except errors" short:"q"                default:"false"`
 
 	Source []string `help:"Include source file(s) ('-' for stdin)" name:"file" placeholder:"PATH" short:"f" type:"existingfile"`
 
 	Init    cmd.Init    `cmd:"" help:"Initialize configuration file"`
 	Fmt     cmd.Fmt     `cmd:"" help:"Format source files"`
-	Eval    cmd.Eval    `cmd:"" help:"Evaluate configuration and print results" default:"withargs"`
+	Eval    cmd.Eval    `cmd:"" help:"Evaluate configuration and print results"           default:"withargs"`
+	Env     cmd.Env     `cmd:"" help:"Evaluate namespace and print environment variables"`
 	Version cmd.Version `cmd:"" help:"Print version information"`
 }
 
@@ -104,7 +110,7 @@ func Run(
 
 	// Finalize logger configuration with all parsed values including
 	// TimeLayout and Caller which don't use TextUnmarshaler.
-	defer cli.Log.start(ctx)()
+	defer cli.Log.start(ctx, cli.Verbose, cli.Quiet)()
 
 	// [pprofConfig.start] is no-op unless built with tag pprof and enabled.
 	defer cli.Pprof.start(ctx)()

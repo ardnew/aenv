@@ -45,14 +45,12 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 var DefaultLogOutput = os.Stderr
 
 type logConfig struct {
-	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"                       short:"g"`
-	Format     logFormat `default:"json"    enum:"${logFormatEnum}" help:"Set log format (${enum})"                      short:"a"`
-	Output     logOutput `                                          help:"Log output file(s) ('-' for stdout)"           short:"o" placeholder:"PATH" type:"path"`
+	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"          short:"g"`
+	Format     logFormat `default:"text"    enum:"${logFormatEnum}" help:"Set log format (${enum})"         short:"a"`
+	Output     string    `default:"-"                               help:"Log output file ('-' for stderr)" short:"o" placeholder:"PATH" type:"path"`
 	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
-	Callsite   bool      `default:"false"                           help:"Include callsite information"                  short:"c"                                   negatable:""`
-	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing"              short:"p"                                   negatable:""`
-	Verbose    int       `                                          help:"Increment log verbosity (-v=debug, -vv=trace)" short:"v"                    type:"counter"`
-	Quiet      bool      `default:"false"                           help:"Suppress all output except errors"             short:"q"`
+	Callsite   bool      `default:"false"                           help:"Include callsite information"     short:"c"                                negatable:""`
+	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing" short:"p"                                negatable:""`
 }
 
 func (*logConfig) vars() kong.Vars {
@@ -71,75 +69,35 @@ func (*logConfig) group() kong.Group {
 	return group
 }
 
-func (f *logConfig) start(ctx context.Context) func() {
+func (f *logConfig) start(ctx context.Context, verbose int, quiet bool) func() {
 	// Apply verbosity to log level
-	level := f.applyVerbosity()
+	level := f.applyVerbosity(verbose, quiet)
 
-	opts := []log.Option{
+	// Open output destination
+	path := strings.TrimLeft(f.Output, " \t")
+
+	var (
+		outputWriter io.Writer
+		outputStr    string
+		closeOutput  func() error
+	)
+
+	if strings.TrimSpace(path) == "-" {
+		outputWriter = DefaultLogOutput
+		outputStr = "-"
+		closeOutput = func() error { return nil }
+	} else {
+		outputWriter, outputStr, closeOutput = openLogFile(ctx, path)
+	}
+
+	log.Config(
 		log.WithLevel(level),
 		log.WithFormat(log.ParseFormat(string(f.Format))),
 		log.WithTimeLayout(f.TimeLayout),
 		log.WithCallsite(f.Callsite),
 		log.WithPretty(f.Pretty),
-	}
-
-	withOutput := func(path string) (log.Option, string, bool, func() error) {
-		flags := os.O_CREATE | os.O_WRONLY
-
-		// Check for >> prefix to determine append vs truncate mode
-		path = strings.TrimLeft(path, " \t")
-
-		var ok bool
-		if path, ok = strings.CutPrefix(path, ">>"); ok {
-			path = strings.TrimLeft(path, " \t") // trim spaces between >> and path
-			flags |= os.O_APPEND
-		} else {
-			flags |= os.O_TRUNC
-		}
-
-		if strings.TrimSpace(path) == "-" {
-			return log.WithOutput(DefaultLogOutput), "-", true, func() error {
-				return nil
-			}
-		}
-
-		file, err := os.OpenFile(path, flags, 0o644)
-		if err != nil {
-			// Exit with error - don't continue with stderr
-			log.ErrorContext(ctx, "open log output file",
-				slog.String("path", path),
-				slog.String("error", err.Error()),
-			)
-			os.Exit(1)
-		}
-
-		return log.WithOutput(file), path, (flags & os.O_APPEND) != 0, file.Close
-	}
-
-	cleanup := func() error { return nil }
-
-	strs := make([]string, 0, len(f.Output))
-	for _, path := range f.Output {
-		opt, str, app, cup := withOutput(path)
-		if app {
-			str += " (APPEND)"
-		}
-
-		opts = append(opts, opt)
-		strs = append(strs, str)
-
-		prev := cleanup
-		cleanup = func() error {
-			err := prev()
-			if err != nil {
-				return err
-			}
-
-			return cup()
-		}
-	}
-
-	log.Config(opts...)
+		log.WithOutput(outputWriter),
+	)
 
 	logAttrs := []slog.Attr{
 		slog.String("level", level.String()),
@@ -147,24 +105,18 @@ func (f *logConfig) start(ctx context.Context) func() {
 		slog.String("time", f.TimeLayout),
 		slog.Bool("callsite", f.Callsite),
 		slog.Bool("pretty", f.Pretty),
+		slog.String("output", outputStr),
 	}
-	if f.Verbose > 0 {
-		logAttrs = append(logAttrs, slog.Int("verbose", f.Verbose))
-	}
-
-	for _, str := range strs {
-		logAttrs = append(logAttrs, slog.String("output", str))
+	if verbose > 0 {
+		logAttrs = append(logAttrs, slog.Int("verbose", verbose))
 	}
 
 	log.TraceContext(ctx, "logger initialized", logAttrs...)
 
-	// Return cleanup function that closes the log file
 	return func() {
-		err := cleanup()
+		err := closeOutput()
 		if err != nil {
-			log.ErrorContext(
-				ctx,
-				"close log output file",
+			log.ErrorContext(ctx, "close log output file",
 				slog.String("error", err.Error()),
 			)
 		}
@@ -193,15 +145,15 @@ func (f *logConfig) scan(args []string) {
 		noPretty   = fs.Bool("no-log-pretty", false, "")
 		callsite   = fs.Bool("log-callsite", false, "")
 		noCallsite = fs.Bool("no-log-callsite", false, "")
-		verbose    = fs.Int("log-verbose", 0, "")
-		quiet      = fs.Bool("log-quiet", false, "")
+		verbose    = fs.Int("verbose", 0, "")
+		quiet      = fs.Bool("quiet", false, "")
 	)
 	fs.IntVar(verbose, "v", 0, "")    // Short form alias
 	fs.BoolVar(quiet, "q", false, "") // Short form alias
 
-	var output logOutput
-	fs.Var(&output, "log-output", "")
-	fs.Var(&output, "o", "") // Short form alias
+	var output string
+	fs.StringVar(&output, "log-output", "", "")
+	fs.StringVar(&output, "o", "", "") // Short form alias
 
 	// Extract only log-related flags and their values from args
 	var logArgs []string
@@ -212,10 +164,10 @@ func (f *logConfig) scan(args []string) {
 		isLongLog := strings.HasPrefix(arg, "--log-") ||
 			strings.HasPrefix(arg, "--no-log-")
 		isShortOutput := arg == "-o" || strings.HasPrefix(arg, "-o=")
-		isQuiet := arg == "-q" || arg == "--log-quiet"
+		isQuiet := arg == "-q" || arg == "--quiet"
 
 		// Check for -v flags (can be stacked like -vv or -vvv)
-		isVerbose := false
+		hasVerbose := false
 
 		if len(arg) > 1 && arg[0] == '-' && arg[1] == 'v' {
 			// Check if it's all v's (like -v, -vv, -vvv)
@@ -231,15 +183,15 @@ func (f *logConfig) scan(args []string) {
 
 			if allV {
 				// Stacked verbose flags
-				f.Verbose = len(arg) - 1
-				isVerbose = true
+				verbose = new(len(arg) - 1)
+				hasVerbose = true
 			} else if strings.HasPrefix(arg, "-v=") {
-				isVerbose = true
+				hasVerbose = true
 			}
 		}
 
-		if isLongLog || isShortOutput || isVerbose || isQuiet {
-			if !isVerbose || strings.Contains(arg, "=") {
+		if isLongLog || isShortOutput || hasVerbose || isQuiet {
+			if !hasVerbose || strings.Contains(arg, "=") {
 				// Add to logArgs for flag parsing (skip already-handled stacked -vv)
 				logArgs = append(logArgs, arg)
 			}
@@ -257,33 +209,21 @@ func (f *logConfig) scan(args []string) {
 	// Parse log arguments (ignore errors - Kong will validate later)
 	_ = fs.Parse(logArgs)
 
-	// Update verbose count from parsed flags (only if not already set by stacked
-	// -vv)
-	if f.Verbose == 0 && *verbose > 0 {
-		f.Verbose = *verbose
-	}
-
-	if *quiet {
-		f.Quiet = true
-	}
-
 	// Apply parsed string configuration
 	if *level != "" {
 		_ = f.Level.UnmarshalText([]byte(*level))
 	}
 
 	// Apply verbosity and configure log level
-	lvl := f.applyVerbosity()
+	lvl := f.applyVerbosity(*verbose, *quiet)
 	log.Config(log.WithLevel(lvl))
 
 	if *format != "" {
 		_ = f.Format.UnmarshalText([]byte(*format))
 	}
 
-	if len(output) > 0 {
+	if output != "" {
 		f.Output = output
-
-		log.Config(log.WithOutput())
 	}
 
 	// Apply boolean flags if explicitly set
@@ -328,13 +268,13 @@ const levelStep = 4
 //	--log-level=error -vv  => error + 2 = info
 //	-v --log-level=error   => error + 1 = warn
 //	--log-level=warn  -v   => warn  + 1 = info
-func (f *logConfig) applyVerbosity() log.Level {
-	if f.Quiet {
+func (f *logConfig) applyVerbosity(verbose int, quiet bool) log.Level {
+	if quiet {
 		return log.LevelError
 	}
 
 	base := log.ParseLevel(string(f.Level))
-	adjusted := base - log.Level(f.Verbose*levelStep)
+	adjusted := base - log.Level(verbose*levelStep)
 
 	if adjusted < log.LevelTrace {
 		return log.LevelTrace
@@ -343,14 +283,36 @@ func (f *logConfig) applyVerbosity() log.Level {
 	return adjusted
 }
 
-type logOutput []string
+// openLogFile opens (or creates) the log output file at path. It handles the
+// ">>" prefix for append mode, returning the writer, a display string for the
+// path, and a close function.
+func openLogFile(
+	ctx context.Context,
+	path string,
+) (io.Writer, string, func() error) {
+	flags := os.O_CREATE | os.O_WRONLY
 
-func (o *logOutput) String() string {
-	return strings.Join(*o, ",")
-}
+	var ok bool
+	if path, ok = strings.CutPrefix(path, ">>"); ok {
+		path = strings.TrimLeft(path, " \t")
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
 
-func (o *logOutput) Set(value string) error {
-	*o = append(*o, value)
+	file, err := os.OpenFile(path, flags, 0o644)
+	if err != nil {
+		log.ErrorContext(ctx, "open log output file",
+			slog.String("path", path),
+			slog.String("error", err.Error()),
+		)
+		os.Exit(1)
+	}
 
-	return nil
+	outputStr := path
+	if flags&os.O_APPEND != 0 {
+		outputStr += " (APPEND)"
+	}
+
+	return file, outputStr, file.Close
 }
