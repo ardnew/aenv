@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -21,6 +23,45 @@ import (
 	"github.com/ardnew/aenv/log"
 	"github.com/ardnew/aenv/pkg"
 )
+
+// teaWriter is an [io.Writer] that routes output through a [tea.Program].
+// Before the program is set, writes fall back to the underlying writer.
+//
+// Log lines are sent asynchronously via [tea.Program.Send] in a goroutine to
+// avoid deadlocking the event loop when logging occurs inside [Model.Update].
+type teaWriter struct {
+	mu       sync.Mutex
+	program  *tea.Program
+	fallback io.Writer
+}
+
+// Write implements [io.Writer]. Each call is treated as one or more complete
+// log lines and printed above the TUI via [tea.Program.Send].
+func (w *teaWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	prog := w.program
+	w.mu.Unlock()
+
+	if prog == nil {
+		return w.fallback.Write(p)
+	}
+
+	for line := range bytes.Lines(p) {
+		line = bytes.TrimRight(line, "\n")
+		if len(line) > 0 {
+			msg := tea.Println(string(line))()
+			go prog.Send(msg)
+		}
+	}
+
+	return len(p), nil
+}
+
+func (w *teaWriter) setProgram(p *tea.Program) {
+	w.mu.Lock()
+	w.program = p
+	w.mu.Unlock()
+}
 
 // editASTMsg is sent when AST editing completes successfully.
 type editASTMsg struct {
@@ -45,85 +86,184 @@ const (
 
 // helpTopic defines a single help topic with its short summary and detailed
 // content.
-type helpTopic struct {
-	name    string      // topic identifier (used in :help <topic>)
-	summary string      // one-line summary shown in :help overview
-	detail  helpDetails // detailed help text shown by :help <topic>
-}
+type (
+	helpTopic struct {
+		name    string      // topic identifier (used in :help <topic>)
+		summary string      // one-line summary shown in :help overview
+		detail  helpSection // detailed help text shown by :help <topic>
+	}
+	helpTopics []helpTopic
+	helpDetail struct {
+		styled     bool
+		key, value []string
+	}
+	helpDetails []helpDetail
+	helpSection struct {
+		pretty  bool
+		title   string
+		content helpDetails
+	}
+)
 
-type helpDetails struct {
-	pretty  bool
-	title   string
-	content []struct{ key, value []string }
-}
+type (
+	slicePair[T any]  [2][]T
+	slicePairs[T any] []slicePair[T]
+)
 
-type slicePairs[T any] [][2][]T
+func renderDetail(
+	s slicePair[string],
+	style slicePair[lipgloss.Style],
+) slicePair[string] {
+	result := slicePair[string]{}
+	for i := range s {
+		result[i] = make([]string, len(s[i]))
+		copy(result[i], s[i])
 
-func makeHelpDetails(title string, pairs slicePairs[string]) helpDetails {
-	content := make([]struct{ key, value []string }, len(pairs))
-	for i, p := range pairs {
-		content[i] = struct{ key, value []string }{key: p[0], value: p[1]}
+		for j := range result[i] {
+			for k := range style[i] {
+				result[i][j] = style[i][k].Render(result[i][j])
+			}
+		}
 	}
 
-	return helpDetails{
+	return result
+}
+
+func makeHelpSection(
+	title string,
+	pairs slicePairs[string],
+	styles ...slicePair[lipgloss.Style],
+) helpSection {
+	content := make(helpDetails, len(pairs))
+	for i, p := range pairs {
+		content[i] = helpDetail{
+			styled: i < len(styles),
+			key:    p[0],
+			value:  p[1],
+		}
+		if content[i].styled {
+			details := renderDetail(p, styles[i])
+			content[i].key = details[0]
+			content[i].value = details[1]
+		}
+	}
+
+	return helpSection{
 		title:   title,
 		content: content,
 	}
 }
 
-func (h helpDetails) String() string {
-	var b, l, r strings.Builder
-	fmt.Fprintf(&b, " %s\n\n", h.title)
+func (h helpSection) String() string {
+	titleStyle := lipgloss.NewStyle().Bold(h.pretty)
+	sectionStyle := lipgloss.NewStyle().Bold(h.pretty).Underline(h.pretty)
+	keyStyle := lipgloss.NewStyle().Bold(h.pretty)
+	descStyle := lipgloss.NewStyle()
 
-	maxL := 0
-
-	for _, item := range h.content {
-		r.WriteString(strings.Join(item.value, "\n") + "\n")
-		key := strings.Join(item.key, " ")
-		l.WriteString(key + strings.Repeat("\n", len(item.value)))
-		maxL = max(maxL, strings.IndexRune(key, '\n'))
+	if h.pretty {
+		descStyle = descStyle.Foreground(lipgloss.Color("8"))
 	}
 
-	keyStyle := lipgloss.NewStyle().Bold(h.pretty).Margin(0, 3, 0, 4)
+	var b strings.Builder
 
-	b.WriteString(
-		lipgloss.JoinHorizontal(0, keyStyle.Render(l.String()), r.String()),
+	fmt.Fprintf(&b, " %s\n\n", titleStyle.Render(h.title))
+
+	// Calculate max key width for alignment.
+	maxKeyWidth := 0
+
+	for _, item := range h.content {
+		key := strings.Join(item.key, " ")
+		if w := lipgloss.Width(key); w > maxKeyWidth {
+			maxKeyWidth = w
+		}
+	}
+
+	const (
+		indent = "    "
+		gap    = "   "
 	)
+
+	for _, item := range h.content {
+		key := strings.Join(item.key, " ")
+		values := item.value
+		isSection := key != "" && len(values) == 1 && values[0] == ""
+		isSpacer := key == "" && len(values) == 1 && values[0] == ""
+
+		if isSpacer {
+			b.WriteString("\n")
+
+			continue
+		}
+
+		if isSection {
+			b.WriteString(indent + sectionStyle.Render(key) + "\n")
+
+			continue
+		}
+
+		stylize := func(s string, style lipgloss.Style) string {
+			if !item.styled {
+				return style.Render(s)
+			}
+
+			return s
+		}
+
+		styledKey := stylize(key, keyStyle)
+
+		pad := strings.Repeat(" ", maxKeyWidth-lipgloss.Width(key))
+
+		for i, val := range values {
+			if i == 0 {
+				fmt.Fprintf(&b, "%s%s%s%s%s\n",
+					indent, styledKey, pad, gap, stylize(val, descStyle))
+			} else {
+				fmt.Fprintf(
+					&b,
+					"%s%s%s%s\n",
+					indent,
+					strings.Repeat(" ", maxKeyWidth),
+					gap,
+					stylize(val, descStyle),
+				)
+			}
+		}
+	}
 
 	return b.String()
 }
 
-// helpTopics defines the available help topics in display order.
-var helpTopics = []helpTopic{
+// globalHelpTopics defines the available help topics in display order.
+var globalHelpTopics = helpTopics{
 	{
 		name:    "keys",
 		summary: "Keyboard shortcuts and keybindings",
-		detail: makeHelpDetails(
-			"Keybindings:",
+		detail: makeHelpSection(
+			"Keybindings",
 			slicePairs[string]{
 				{{"Esc"}, {"Toggle evaluation or command mode"}},
 				{{"Tab"}, {"Cycle completions forward"}},
 				{{"Shift+Tab"}, {"Cycle completions backward"}},
-				{{"↑ / ↓"}, {"Navigate all history", " (mode follows entry)"}},
+				{{"↑/↓"}, {"Navigate all history", "· mode follows entry"}},
 				{{"Shift+↑/↓"}, {"Navigate history within current mode only"}},
 				{
 					{"Alt+↑/↓"},
 					{
 						"Navigate command history",
-						" (automatically restores previous mode)",
+						"· restore previous mode+input  ",
 					},
 				},
 				{{"Ctrl+L"}, {"Clear screen"}},
-				{{"Ctrl+C"}, {"Clear input", " (quit if input is empty)"}},
-				{{"Ctrl+D"}, {"Quit", " (discards input and signals EOF)"}},
+				{{"Ctrl+C"}, {"Clear input", "· quit if input is empty"}},
+				{{"Ctrl+D"}, {"Quit", "· discards input and signals EOF"}},
 			},
 		),
 	},
 	{
 		name:    "commands",
 		summary: "Available REPL commands",
-		detail: makeHelpDetails(
-			"Commands  (switch to command mode with Esc, or type : alone in eval mode):",
+		detail: makeHelpSection(
+			"Commands",
 			slicePairs[string]{
 				{{"help"}, {"Show help overview and available topics"}},
 				{{"help", "<topic>"}, {"Show detailed help for a specific topic"}},
@@ -131,9 +271,9 @@ var helpTopics = []helpTopic{
 				{
 					{"edit"},
 					{
-						"Open all sources combined in $EDITOR",
-						" (recompiles and reloads on save,",
-						"  or resumes editing on parse error)",
+						"Open all sources merged in $EDITOR",
+						"· recompile and reload on save, or",
+						"· resume editing on parse error",
 					},
 				},
 				{{"clear"}, {"Clear the screen"}},
@@ -144,8 +284,8 @@ var helpTopics = []helpTopic{
 	{
 		name:    "eval",
 		summary: "Expression evaluation and syntax",
-		detail: makeHelpDetails(
-			"Evaluation:",
+		detail: makeHelpSection(
+			"Evaluation",
 			slicePairs[string]{
 				{{"Syntax"}, {""}},
 				{{"name : expr"}, {"Define a namespace with an expression value"}},
@@ -245,11 +385,17 @@ var helpTopics = []helpTopic{
 	{
 		name:    "modes",
 		summary: "Evaluation and command modes",
-		detail: makeHelpDetails(
-			"Modes:",
+		detail: makeHelpSection(
+			"Modes",
 			slicePairs[string]{
 				{{"➜ eval"}, {"Evaluate expressios"}},
 				{{" :command"}, {"Command and control the REPL"}},
+			},
+			slicePair[lipgloss.Style]{
+				{promptStyle}, {hintStyle},
+			},
+			slicePair[lipgloss.Style]{
+				{ctrlPromptStyle}, {hintStyle},
 			},
 		),
 	},
@@ -257,8 +403,8 @@ var helpTopics = []helpTopic{
 
 // helpTopicNames returns the sorted list of topic names for completion.
 func helpTopicNames() []string {
-	names := make([]string, len(helpTopics))
-	for i, t := range helpTopics {
+	names := make([]string, len(globalHelpTopics))
+	for i, t := range globalHelpTopics {
 		names[i] = t.name
 	}
 
@@ -266,47 +412,58 @@ func helpTopicNames() []string {
 }
 
 // helpOverview returns the top-level help output listing available topics.
-func helpOverview() string {
+func helpOverview(pretty bool) string {
 	var b strings.Builder
 
-	b.WriteString(
-		"\nAvailable topics  (type :help <topic> for details):\n\n",
-	)
+	headerStyle := lipgloss.NewStyle().Bold(pretty)
+	nameStyle := lipgloss.NewStyle().Bold(pretty)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("Topics"))
+	b.WriteString("\n\n")
 
 	// Find max topic name length for alignment.
 	maxLen := 0
-	for _, t := range helpTopics {
+	for _, t := range globalHelpTopics {
 		if len(t.name) > maxLen {
 			maxLen = len(t.name)
 		}
 	}
 
-	for _, t := range helpTopics {
+	for _, t := range globalHelpTopics {
 		pad := strings.Repeat(" ", maxLen-len(t.name)+2)
-		fmt.Fprintf(&b, "  %s%s%s\n", t.name, pad, t.summary)
+		if pretty {
+			fmt.Fprintf(&b, "  %s%s%s\n",
+				nameStyle.Render(t.name), pad, descStyle.Render(t.summary))
+		} else {
+			fmt.Fprintf(&b, "  %s%s%s\n", t.name, pad, t.summary)
+		}
 	}
 
 	return b.String()
 }
 
-// helpDetail returns the detailed text for a specific topic, or an error
+// section returns the detailed text for a specific topic, or an error
 // message if the topic is not found.
-func helpDetail(topic string) string {
+func (h helpTopics) section(topic string, pretty bool) string {
 	topic = strings.ToLower(strings.TrimSpace(topic))
 
-	for _, t := range helpTopics {
+	for _, t := range globalHelpTopics {
 		if t.name == topic {
-			return "\n" + t.detail.String()
+			d := t.detail
+			d.pretty = pretty
+
+			return "\n" + d.String()
 		}
 	}
 
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Unknown help topic: %s\n\nAvailable topics:\n", topic)
+	log.Make(&b, log.WithFormat(log.FormatText), log.WithTimeLayout("")).
+		Error("unknown help topic", slog.String("topic", topic))
 
-	for _, t := range helpTopics {
-		fmt.Fprintf(&b, "  %s\n", t.name)
-	}
+	b.WriteString(helpOverview(pretty))
 
 	return b.String()
 }
@@ -354,6 +511,7 @@ type model struct {
 	input            textinput.Model
 	ast              *lang.AST
 	logger           log.Logger
+	pretty           bool
 	history          *History
 	historyIdx       int
 	matches          fuzzy.Matches // current fuzzy match results
@@ -384,6 +542,7 @@ func Run(
 	reader io.Reader,
 	cacheDir string,
 	logger log.Logger,
+	pretty bool,
 ) (err error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 
@@ -439,9 +598,14 @@ func Run(
 		slog.Int("entry_count", history.Len()),
 	)
 
-	m := newModel(ctx, ast, history, logger)
+	tw := &teaWriter{fallback: io.Discard}
+	logger = logger.Wrap(log.WithOutput(tw))
+
+	m := newModel(ctx, ast, history, logger, pretty)
 
 	p := tea.NewProgram(m, tea.WithContext(ctx))
+	tw.setProgram(p)
+
 	_, err = p.Run()
 
 	return err
@@ -454,6 +618,7 @@ func newModel(
 	ast *lang.AST,
 	history *History,
 	logger log.Logger,
+	pretty bool,
 ) model {
 	ti := textinput.New()
 	ti.Prompt = promptStyle.Render(evalPrompt)
@@ -466,6 +631,7 @@ func newModel(
 		input:      ti,
 		ast:        ast,
 		logger:     logger,
+		pretty:     pretty,
 		history:    history,
 		historyIdx: history.Len(),
 		width:      defaultWidth,
@@ -1311,10 +1477,10 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 // returned; otherwise the detailed text for the given topic is returned.
 func (m model) helpView(topic string) string {
 	if topic == "" {
-		return helpOverview()
+		return helpOverview(m.pretty)
 	}
 
-	return helpDetail(topic)
+	return globalHelpTopics.section(topic, m.pretty)
 }
 
 func (m model) listNamespaces() string {

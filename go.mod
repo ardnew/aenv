@@ -15,6 +15,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/goccy/go-yaml v1.19.2
+	github.com/mattn/go-isatty v0.0.20
 	github.com/pkg/profile v1.7.0
 	github.com/sahilm/fuzzy v0.1.1
 )
@@ -32,7 +33,6 @@ require (
 	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.21 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect

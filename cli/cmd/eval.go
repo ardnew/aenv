@@ -40,7 +40,13 @@ func (e *Eval) Run(ctx context.Context) (err error) {
 	)
 
 	if len(e.Expr) == 0 {
-		return repl.Run(ctx, sourceFilesFrom(ctx), cacheDir, logger)
+		return repl.Run(
+			ctx,
+			sourceFilesFrom(ctx),
+			cacheDir,
+			logger,
+			PrettyFrom(ctx),
+		)
 	}
 
 	var reader io.Reader

@@ -17,7 +17,7 @@ func TestName(t *testing.T) {
 }
 
 func TestDescription(t *testing.T) {
-	expected := "Composable, expression-driven environment generator"
+	expected := "Composite environment generator"
 	if Description != expected {
 		t.Errorf("Expected Description to be %q, got %q", expected, Description)
 	}

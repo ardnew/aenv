@@ -45,12 +45,11 @@ func (l *logLevel) UnmarshalText(text []byte) error {
 var DefaultLogOutput = os.Stderr
 
 type logConfig struct {
-	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"          short:"g"`
-	Format     logFormat `default:"text"    enum:"${logFormatEnum}" help:"Set log format (${enum})"         short:"a"`
-	Output     string    `default:"-"                               help:"Log output file ('-' for stderr)" short:"o" placeholder:"PATH" type:"path"`
+	Level      logLevel  `default:"info"    enum:"${logLevelEnum}"  help:"Set log level (${enum})"          short:"l"`
+	Format     logFormat `default:"text"    enum:"${logFormatEnum}" help:"Set log format (${enum})"         short:"L"`
+	Output     string    `default:"-"                               help:"Log output file ('-' for stderr)"           placeholder:"PATH" type:"path"`
 	TimeLayout string    `default:"RFC3339"                         help:"Set timestamp format"`
-	Callsite   bool      `default:"false"                           help:"Include callsite information"     short:"c"                                negatable:""`
-	Pretty     bool      `default:"true"                            help:"Enable colorized pretty printing" short:"p"                                negatable:""`
+	Caller     bool      `default:"false"                           help:"Include origin of log event"                                               negatable:""`
 }
 
 func (*logConfig) vars() kong.Vars {
@@ -69,7 +68,11 @@ func (*logConfig) group() kong.Group {
 	return group
 }
 
-func (f *logConfig) start(ctx context.Context, verbose int, quiet bool) func() {
+func (f *logConfig) start(
+	ctx context.Context,
+	verbose int,
+	quiet, pretty bool,
+) func() {
 	// Apply verbosity to log level
 	level := f.applyVerbosity(verbose, quiet)
 
@@ -94,8 +97,8 @@ func (f *logConfig) start(ctx context.Context, verbose int, quiet bool) func() {
 		log.WithLevel(level),
 		log.WithFormat(log.ParseFormat(string(f.Format))),
 		log.WithTimeLayout(f.TimeLayout),
-		log.WithCallsite(f.Callsite),
-		log.WithPretty(f.Pretty),
+		log.WithCallsite(f.Caller),
+		log.WithPretty(pretty),
 		log.WithOutput(outputWriter),
 	)
 
@@ -103,8 +106,8 @@ func (f *logConfig) start(ctx context.Context, verbose int, quiet bool) func() {
 		slog.String("level", level.String()),
 		slog.String("format", string(f.Format)),
 		slog.String("time", f.TimeLayout),
-		slog.Bool("callsite", f.Callsite),
-		slog.Bool("pretty", f.Pretty),
+		slog.Bool("callsite", f.Caller),
+		slog.Bool("pretty", pretty),
 		slog.String("output", outputStr),
 	}
 	if verbose > 0 {
@@ -132,28 +135,29 @@ func (f *logConfig) start(ctx context.Context, verbose int, quiet bool) func() {
 // configure the logger as flags are encountered during parsing, boolean flags
 // like Pretty don't go through that interface. This pre-scan ensures all logger
 // flags are applied early.
-func (f *logConfig) scan(args []string) {
+func (f *logConfig) scan(args []string, pretty *bool) {
 	// Create flag set for log configuration parsing
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // Suppress error output during pre-scan
 
 	// Define log-related flags
 	var (
-		level      = fs.String("log-level", "", "")
-		format     = fs.String("log-format", "", "")
-		pretty     = fs.Bool("log-pretty", false, "")
-		noPretty   = fs.Bool("no-log-pretty", false, "")
-		callsite   = fs.Bool("log-callsite", false, "")
-		noCallsite = fs.Bool("no-log-callsite", false, "")
-		verbose    = fs.Int("verbose", 0, "")
-		quiet      = fs.Bool("quiet", false, "")
+		level     = fs.String("log-level", "", "")
+		format    = fs.String("log-format", "", "")
+		setPretty = fs.Bool("pretty", false, "")
+		noPretty  = fs.Bool("no-pretty", false, "")
+		caller    = fs.Bool("log-caller", false, "")
+		noCaller  = fs.Bool("no-log-caller", false, "")
+		verbose   = fs.Int("verbose", 0, "")
+		quiet     = fs.Bool("quiet", false, "")
 	)
+	fs.StringVar(level, "l", "", "")  // Short form alias
+	fs.StringVar(format, "L", "", "") // Short form alias
 	fs.IntVar(verbose, "v", 0, "")    // Short form alias
 	fs.BoolVar(quiet, "q", false, "") // Short form alias
 
 	var output string
 	fs.StringVar(&output, "log-output", "", "")
-	fs.StringVar(&output, "o", "", "") // Short form alias
 
 	// Extract only log-related flags and their values from args
 	var logArgs []string
@@ -163,7 +167,10 @@ func (f *logConfig) scan(args []string) {
 		// Check for long-form log flags or short flags
 		isLongLog := strings.HasPrefix(arg, "--log-") ||
 			strings.HasPrefix(arg, "--no-log-")
-		isShortOutput := arg == "-o" || strings.HasPrefix(arg, "-o=")
+		isPretty := arg == "--pretty" || arg == "--no-pretty" ||
+			arg == "-p"
+		isShortLevel := arg == "-l" || strings.HasPrefix(arg, "-l=")
+		isShortFormat := arg == "-L" || strings.HasPrefix(arg, "-L=")
 		isQuiet := arg == "-q" || arg == "--quiet"
 
 		// Check for -v flags (can be stacked like -vv or -vvv)
@@ -190,7 +197,8 @@ func (f *logConfig) scan(args []string) {
 			}
 		}
 
-		if isLongLog || isShortOutput || hasVerbose || isQuiet {
+		if isLongLog || isPretty || isShortLevel || isShortFormat || hasVerbose ||
+			isQuiet {
 			if !hasVerbose || strings.Contains(arg, "=") {
 				// Add to logArgs for flag parsing (skip already-handled stacked -vv)
 				logArgs = append(logArgs, arg)
@@ -227,26 +235,26 @@ func (f *logConfig) scan(args []string) {
 	}
 
 	// Apply boolean flags if explicitly set
-	if *pretty {
-		f.Pretty = true
-
-		log.Config(log.WithPretty(true))
+	if *setPretty {
+		*pretty = true
 	}
 
 	if *noPretty {
-		f.Pretty = false
-
-		log.Config(log.WithPretty(false))
+		*pretty = false
 	}
 
-	if *callsite {
-		f.Callsite = true
+	// Always apply pretty so the TTY-based default takes effect immediately,
+	// even when the user didn't pass --pretty or --no-pretty.
+	log.Config(log.WithPretty(*pretty))
+
+	if *caller {
+		f.Caller = true
 
 		log.Config(log.WithCallsite(true))
 	}
 
-	if *noCallsite {
-		f.Callsite = false
+	if *noCaller {
+		f.Caller = false
 
 		log.Config(log.WithCallsite(false))
 	}

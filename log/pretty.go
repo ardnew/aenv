@@ -49,33 +49,56 @@ func (h *prettyTextHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *prettyTextHandler) Handle(_ context.Context, r slog.Record) error {
 	buf := new(bytes.Buffer)
 
+	resolve := h.opts.ReplaceAttr
+
 	// Write time if configured
 	if !r.Time.IsZero() {
-		timeAttr := slog.Time(slog.TimeKey, r.Time)
-		h.writeAttr(buf, timeAttr)
+		if a := resolveAttr(
+			resolve,
+			h.groups,
+			slog.Time(slog.TimeKey, r.Time),
+		); a.Key != "" {
+			h.writeAttr(buf, a)
+		}
 	}
 
 	// Write level
-	levelAttr := slog.Any(slog.LevelKey, r.Level)
-	h.writeAttr(buf, levelAttr)
+	if a := resolveAttr(
+		resolve,
+		h.groups,
+		slog.Any(slog.LevelKey, r.Level),
+	); a.Key != "" {
+		h.writeLevelAttr(buf, a, r.Level)
+	}
 
 	// Write source if configured
 	if h.opts.AddSource {
 		if src := r.Source(); src != nil {
-			// Format as file:line
 			sourceStr := fmt.Sprintf("%s:%d", src.File, src.Line)
-			sourceAttr := slog.String(slog.SourceKey, sourceStr)
-			h.writeAttr(buf, sourceAttr)
+			if a := resolveAttr(
+				resolve,
+				h.groups,
+				slog.String(slog.SourceKey, sourceStr),
+			); a.Key != "" {
+				h.writeAttr(buf, a)
+			}
 		}
 	}
 
 	// Write message
-	msgAttr := slog.String(slog.MessageKey, r.Message)
-	h.writeAttr(buf, msgAttr)
+	if a := resolveAttr(
+		resolve,
+		h.groups,
+		slog.String(slog.MessageKey, r.Message),
+	); a.Key != "" {
+		h.writeAttr(buf, a)
+	}
 
 	// Write each attribute
 	r.Attrs(func(a slog.Attr) bool {
-		h.writeAttr(buf, a)
+		if a = resolveAttr(resolve, h.groups, a); a.Key != "" {
+			h.writeAttr(buf, a)
+		}
 
 		return true
 	})
@@ -110,6 +133,35 @@ func (h *prettyTextHandler) WithGroup(name string) slog.Handler {
 		w:      h.w,
 		groups: append(h.groups[:len(h.groups):len(h.groups)], name),
 	}
+}
+
+func (h *prettyTextHandler) writeLevelAttr(
+	buf *bytes.Buffer,
+	a slog.Attr,
+	level slog.Level,
+) {
+	if buf.Len() > 0 {
+		buf.WriteByte(' ')
+	}
+
+	buf.WriteString(colorGray)
+	buf.WriteString(a.Key)
+	buf.WriteString(colorReset)
+	buf.WriteByte('=')
+
+	switch {
+	case level >= slog.LevelError:
+		buf.WriteString(colorRed)
+	case level >= slog.LevelWarn:
+		buf.WriteString(colorYellow)
+	case level >= slog.LevelInfo:
+		buf.WriteString(colorGreen)
+	default:
+		buf.WriteString(colorBlue)
+	}
+
+	buf.WriteString(a.Value.String())
+	buf.WriteString(colorReset)
 }
 
 func (h *prettyTextHandler) writeAttr(buf *bytes.Buffer, a slog.Attr) {
@@ -231,36 +283,60 @@ func (h *prettyJSONHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *prettyJSONHandler) Handle(_ context.Context, r slog.Record) error {
 	buf := new(bytes.Buffer)
 
+	resolve := h.opts.ReplaceAttr
+
 	buf.WriteString("{\n")
 
-	// Add standard fields
 	first := true
+
+	// Write time if configured
 	if !r.Time.IsZero() {
-		h.writeJSONField(
-			buf,
-			slog.TimeKey,
-			r.Time.Format("2006-01-02T15:04:05Z07:00"),
-			&first,
-		)
+		if a := resolveAttr(
+			resolve,
+			nil,
+			slog.Time(slog.TimeKey, r.Time),
+		); a.Key != "" {
+			h.writeJSONAttr(buf, a, &first)
+		}
 	}
 
-	// Use custom Level.String() to show "trace" instead of "DEBUG-4"
-	h.writeJSONField(buf, slog.LevelKey, Level(r.Level).String(), &first)
+	// Write level
+	if a := resolveAttr(
+		resolve,
+		nil,
+		slog.Any(slog.LevelKey, r.Level),
+	); a.Key != "" {
+		h.writeJSONAttr(buf, a, &first)
+	}
 
 	// Write source if configured
 	if h.opts.AddSource {
 		if src := r.Source(); src != nil {
-			// Format as file:line
 			sourceStr := fmt.Sprintf("%s:%d", src.File, src.Line)
-			h.writeJSONField(buf, slog.SourceKey, sourceStr, &first)
+			if a := resolveAttr(
+				resolve,
+				nil,
+				slog.String(slog.SourceKey, sourceStr),
+			); a.Key != "" {
+				h.writeJSONAttr(buf, a, &first)
+			}
 		}
 	}
 
-	h.writeJSONField(buf, slog.MessageKey, r.Message, &first)
-
-	// Add custom attributes
-	r.Attrs(func(a slog.Attr) bool {
+	// Write message
+	if a := resolveAttr(
+		resolve,
+		nil,
+		slog.String(slog.MessageKey, r.Message),
+	); a.Key != "" {
 		h.writeJSONAttr(buf, a, &first)
+	}
+
+	// Write custom attributes
+	r.Attrs(func(a slog.Attr) bool {
+		if a = resolveAttr(resolve, nil, a); a.Key != "" {
+			h.writeJSONAttr(buf, a, &first)
+		}
 
 		return true
 	})
@@ -296,29 +372,6 @@ func (h *prettyJSONHandler) WithGroup(string) slog.Handler {
 	}
 }
 
-func (h *prettyJSONHandler) writeJSONField(
-	buf *bytes.Buffer,
-	key string,
-	value any,
-	first *bool,
-) {
-	if !*first {
-		buf.WriteString(",\n")
-	}
-
-	*first = false
-
-	buf.WriteString("  ")
-	// Key in gray
-	buf.WriteString(colorGray)
-	buf.WriteString(key)
-	buf.WriteString(colorReset)
-	buf.WriteString(": ")
-
-	// Write value based on type
-	h.writeJSONValue(buf, value)
-}
-
 func (h *prettyJSONHandler) writeJSONAttr(
 	buf *bytes.Buffer,
 	a slog.Attr,
@@ -339,6 +392,19 @@ func (h *prettyJSONHandler) writeJSONAttr(
 
 	// Write value
 	h.writeJSONValue(buf, a.Value.Any())
+}
+
+// resolveAttr applies the ReplaceAttr function to an attribute if configured.
+func resolveAttr(
+	replace func([]string, slog.Attr) slog.Attr,
+	groups []string,
+	a slog.Attr,
+) slog.Attr {
+	if replace != nil {
+		return replace(groups, a)
+	}
+
+	return a
 }
 
 func (h *prettyJSONHandler) writeJSONValue(buf *bytes.Buffer, v any) {

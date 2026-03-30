@@ -36,14 +36,14 @@ import (
 //	config : {
 //	  log_level = "debug",
 //	  log_format = "json",
-//	  log_pretty = true
+//	  pretty = true
 //	}
 //
 // This configuration will be applied to Kong flags:
 //
 //	--log-level=debug
 //	--log-format=json
-//	--log-pretty=true
+//	--pretty=true
 //
 // Command-line flags override config file values.
 func resolve(

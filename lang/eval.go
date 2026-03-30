@@ -852,6 +852,9 @@ func formatResultValue(v any) string {
 	case map[string]any:
 		return formatMap(val)
 
+	case map[string]string:
+		return formatStringMap(val)
+
 	default:
 		if isFunction(v) {
 			return formatFuncValue("", v)
@@ -898,6 +901,23 @@ func formatMap(m map[string]any) string {
 		}
 
 		parts[i] = strconv.Quote(k) + ": " + vFormatted
+	}
+
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+// formatStringMap formats a map[string]string as expr-lang map syntax.
+// Keys are sorted lexicographically for deterministic output.
+func formatStringMap(m map[string]string) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+
+	keys := sortedKeys(m)
+	parts := make([]string, len(keys))
+
+	for i, k := range keys {
+		parts[i] = strconv.Quote(k) + ": " + strconv.Quote(m[k])
 	}
 
 	return "{" + strings.Join(parts, ", ") + "}"

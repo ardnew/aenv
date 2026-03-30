@@ -235,11 +235,11 @@ func TestLogger_AllLevels_LogSuccessfully(t *testing.T) {
 		logFunc func(Logger, string, ...slog.Attr)
 		level   string
 	}{
-		{"trace", Logger.Trace, "trace"},
-		{"debug", Logger.Debug, "debug"},
-		{"info", Logger.Info, "info"},
-		{"warn", Logger.Warn, "warn"},
-		{"error", Logger.Error, "error"},
+		{"trace", Logger.Trace, "TRACE"},
+		{"debug", Logger.Debug, "DEBUG"},
+		{"info", Logger.Info, "INFO"},
+		{"warn", Logger.Warn, "WARN"},
+		{"error", Logger.Error, "ERROR"},
 	}
 
 	for _, tt := range tests {

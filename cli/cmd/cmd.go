@@ -30,6 +30,7 @@ func kongContextFrom(ctx context.Context) *kong.Context {
 type (
 	sourceFilesKey    struct{}
 	hasUserSourcesKey struct{}
+	prettyKey         struct{}
 	sourceFiles       struct {
 		read     []io.Reader
 		hasStdin bool
@@ -214,6 +215,18 @@ func sourceFilesFrom(ctx context.Context) SourceFiles {
 // files via -f flags or stdin.
 func hasUserSourcesFrom(ctx context.Context) bool {
 	v, _ := ctx.Value(hasUserSourcesKey{}).(bool)
+
+	return v
+}
+
+// WithPretty returns a new context.Context containing the given pretty flag.
+func WithPretty(ctx context.Context, pretty bool) context.Context {
+	return context.WithValue(ctx, prettyKey{}, pretty)
+}
+
+// PrettyFrom retrieves the pretty flag stored in ctx by WithPretty.
+func PrettyFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(prettyKey{}).(bool)
 
 	return v
 }

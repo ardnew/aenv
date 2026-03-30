@@ -25,6 +25,8 @@
         "GOEXPERIMENT": "goroutineleakprofile",
       },
       "args": [
+        "init",
+        "-w",
       ],
     },
     {
