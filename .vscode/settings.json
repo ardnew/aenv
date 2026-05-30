@@ -1,6 +1,6 @@
 // filepath: .vscode/settings.json
 {
-  "go.terminal.activateEnvironment": false,
+  "go.terminal.activateEnvironment": true,
 
   "go.buildFlags": [
     "-v",
@@ -24,22 +24,22 @@
 
   "go.diagnostic.vulncheck": "Imports",
 
-  "go.lintTool": "golangci-lint-v2",
+  "go.lintTool": "golangci-lint",
   "go.lintOnSave": "workspace",
   "go.lintFlags": [
-    "--config=.golangci.yml",
+    "run",
+    "--config=${workspaceFolder}/.golangci.yml",
     "--path-mode=abs",
     "--fix",
   ],
 
   "go.formatTool": "custom",
   "go.alternateTools": {
-    "customFormatter": "golangci-lint-v2"
+    "customFormatter": "golangci-lint"
   },
   "go.formatFlags": [
     "fmt",
-    "--config=.golangci.yml",
-    "--fix",
+    "--config=${workspaceFolder}/.golangci.yml",
     "--stdin"
   ],
 
@@ -80,7 +80,12 @@
     },
   },
 
+  "[go]": {
+    "editor.formatOnSave": true
+  },
+
   "[markdown]": {
     "editor.formatOnSave": true
   },
+  "a-file-icon-vscode.folderTheme": "classic",
 }

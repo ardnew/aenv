@@ -1,2 +1,2 @@
-// Package main is a simple configuration language for generating environments.
+// Package main is a configuration language for generating environments.
 package main

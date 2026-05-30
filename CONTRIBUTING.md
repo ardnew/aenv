@@ -63,6 +63,7 @@ golangci-lint run --config=.golangci.yaml --fix
 - Follow [Effective Go](https://go.dev/doc/effective_go) and
   [Code Review Comments](https://go.dev/wiki/CodeReviewComments).
 - Place package documentation in `doc.go` only, starting with `Package <name>`.
+- Put package-level usage narratives in `doc.go`, and put testable package examples in an adjacent `example_test.go` because `go test` only executes `Example...` functions from `_test.go` files.
 - Doc comments on exported symbols start with the symbol name.
 - Test names follow `Test<Type>_<Method>_<Behavior>`.
 - Use table-driven tests with `t.Run`.

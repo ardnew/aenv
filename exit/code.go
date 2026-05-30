@@ -2,12 +2,12 @@ package exit
 
 // Coder is implemented by types that can be used as exit codes.
 type Coder interface {
-	// Code returns the process exit code or status.
-	Code() int
+	// ExitCode returns the process exit code or status.
+	ExitCode() int
 }
 
-// IsError returns true if c.Code() returns a defined, non-zero exit code.
-func IsError(c Coder) bool { return c.Code() >= _Base && c.Code() < _Max }
+// IsError returns true if c.ExitCode() returns a defined, non-zero exit code.
+func IsError(c Coder) bool { return c.ExitCode() > _min && c.ExitCode() < _max }
 
 // Exit codes are based on BSD sysexits.h.
 const (
@@ -17,7 +17,7 @@ const (
 	// Error numbers begin at _ExitBase to reduce the possibility of clashing with
 	// other exit statuses that random programs may already return.
 	// This is a bookkeeping detail and should not be used as an exit status.
-	_Base = iota + 64
+	_min = iota + 64
 
 	// The command was used incorrectly, e.g., with the wrong number of arguments,
 	// a bad flag, bad syntax in a parameter, or whatever.
@@ -85,5 +85,5 @@ const (
 	// The maximally defined exit status.
 	//
 	// This is a bookkeeping detail and should not be used as an exit status.
-	_Max
+	_max
 )
