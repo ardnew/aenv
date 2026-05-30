@@ -43,7 +43,7 @@ type logHandlerSpec struct {
 	levelSet  bool
 }
 
-func (spec *logHandlerSpec) UnmarshalText(text []byte) error {
+func (s *logHandlerSpec) UnmarshalText(text []byte) error {
 	fields := strings.Split(string(text), ",")
 	if len(fields) > 3 {
 		return Error{
@@ -72,7 +72,7 @@ func (spec *logHandlerSpec) UnmarshalText(text []byte) error {
 		parsed.levelSet = true
 	}
 
-	*spec = parsed
+	*s = parsed
 	return nil
 }
 

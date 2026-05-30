@@ -24,18 +24,18 @@ const (
 )
 
 // UnmarshalText implements the encoding.TextUnmarshaler interface.
-func (level *Level) UnmarshalText(text []byte) error {
+func (l *Level) UnmarshalText(text []byte) error {
 	switch string(text) {
 	case "error":
-		*level = LevelError
+		*l = LevelError
 	case "warn":
-		*level = LevelWarn
+		*l = LevelWarn
 	case "info":
-		*level = LevelInfo
+		*l = LevelInfo
 	case "debug":
-		*level = LevelDebug
+		*l = LevelDebug
 	case "trace":
-		*level = LevelTrace
+		*l = LevelTrace
 	default:
 		return fmt.Errorf("log: invalid level: %s", text)
 	}
@@ -43,8 +43,8 @@ func (level *Level) UnmarshalText(text []byte) error {
 }
 
 // Symbol returns the terminal badge for the level (for example, "+" or ":").
-func (level Level) Symbol() string {
-	switch level {
+func (l Level) Symbol() string {
+	switch l {
 	case LevelError:
 		return "="
 	case LevelWarn:
@@ -64,14 +64,14 @@ func (level Level) Symbol() string {
 func LevelRange() (min, max Level) { return levelMin, levelMax }
 
 // Valid reports whether the level is a recognized severity.
-func (level Level) Valid() bool {
-	return level >= levelMin && level <= levelMax
+func (l Level) Valid() bool {
+	return l >= levelMin && l <= levelMax
 }
 
 // Allows reports whether a handler configured at this level would forward a
 // record at the given level.
-func (level Level) Allows(record Level) bool {
-	return level.Valid() && record.Valid() && record <= level
+func (l Level) Allows(record Level) bool {
+	return l.Valid() && record.Valid() && record <= l
 }
 
 // Format is the output encoding for a Handler.
@@ -88,12 +88,12 @@ const (
 )
 
 // UnmarshalText implements the encoding.TextUnmarshaler interface.
-func (format *Format) UnmarshalText(text []byte) error {
+func (f *Format) UnmarshalText(text []byte) error {
 	switch string(text) {
 	case "text":
-		*format = FormatText
+		*f = FormatText
 	case "json":
-		*format = FormatJSON
+		*f = FormatJSON
 	default:
 		return fmt.Errorf("log: invalid format: %s", text)
 	}
@@ -104,8 +104,8 @@ func (format *Format) UnmarshalText(text []byte) error {
 func FormatRange() (min, max Format) { return formatMin, formatMax }
 
 // Valid reports whether the format is a recognized log format.
-func (format Format) Valid() bool {
-	return format >= formatMin && format <= formatMax
+func (f Format) Valid() bool {
+	return f >= formatMin && f <= formatMax
 }
 
 // HandlerOptions configures a new Handler.

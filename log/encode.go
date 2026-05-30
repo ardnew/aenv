@@ -64,11 +64,11 @@ func (e eventRecord) resolveVariants(driver *Driver, needs emitNeeds) eventRecor
 	return e
 }
 
-func (driver *Driver) emit(level Level, attrs []slog.Attr, buildMessage func() string) {
-	if driver == nil || !level.Valid() {
+func (d *Driver) emit(level Level, attrs []slog.Attr, buildMessage func() string) {
+	if d == nil || !level.Valid() {
 		return
 	}
-	candidates := driver.selectHandlers(level)
+	candidates := d.selectHandlers(level)
 	if len(candidates) == 0 {
 		return
 	}
@@ -78,7 +78,7 @@ func (driver *Driver) emit(level Level, attrs []slog.Attr, buildMessage func() s
 		message: buildMessage(),
 		attrs:   normalizeEventAttrs(attrs),
 	}.resolveVariants(
-		driver,
+		d,
 		gatherEmitNeeds(candidates),
 	)
 
@@ -116,8 +116,8 @@ func isInternalLogFrame(path string) bool {
 	return rel == "log/driver.go" || rel == "log/encode.go"
 }
 
-func (driver *Driver) selectHandlers(level Level) []handlerCandidate {
-	handlers := driver.snapshotHandlers()
+func (d *Driver) selectHandlers(level Level) []handlerCandidate {
+	handlers := d.snapshotHandlers()
 	selected := make([]handlerCandidate, 0, len(handlers))
 	for _, handler := range handlers {
 		config, ok := handler.snapshotConfig()
@@ -149,13 +149,13 @@ func gatherEmitNeeds(candidates []handlerCandidate) emitNeeds {
 	return needs
 }
 
-func (driver *Driver) lookupSource(pc uintptr, file string, line int) callsite {
-	driver.mu.Lock()
-	if cached, ok := driver.sourceCache[pc]; ok {
-		driver.mu.Unlock()
+func (d *Driver) lookupSource(pc uintptr, file string, line int) callsite {
+	d.mu.Lock()
+	if cached, ok := d.sourceCache[pc]; ok {
+		d.mu.Unlock()
 		return cached
 	}
-	driver.mu.Unlock()
+	d.mu.Unlock()
 
 	relativePath := filepath.Base(file)
 	if moduleRoot != "" {
@@ -176,14 +176,14 @@ func (driver *Driver) lookupSource(pc uintptr, file string, line int) callsite {
 		},
 	}
 
-	driver.mu.Lock()
-	defer driver.mu.Unlock()
-	if driver.sourceCache == nil {
-		driver.sourceCache = make(map[uintptr]callsite)
-	} else if cached, ok := driver.sourceCache[pc]; ok {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.sourceCache == nil {
+		d.sourceCache = make(map[uintptr]callsite)
+	} else if cached, ok := d.sourceCache[pc]; ok {
 		return cached
 	}
-	driver.sourceCache[pc] = source
+	d.sourceCache[pc] = source
 	return source
 }
 
@@ -227,13 +227,13 @@ func normalizeEventAttr(attr slog.Attr) (slog.Attr, bool) {
 	return attr, true
 }
 
-func (handler *Handler) write(config handlerConfig, record eventRecord) {
+func (h *Handler) write(config handlerConfig, record eventRecord) {
 	encoded := encodeEvent(config, record)
 	if len(encoded) == 0 {
 		return
 	}
-	handler.writeMu.Lock()
-	defer handler.writeMu.Unlock()
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
 	_, _ = config.writer.Write(encoded)
 }
 

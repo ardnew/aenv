@@ -16,10 +16,10 @@ const _Format_name = "textjson"
 
 var _Format_index = [...]uint8{0, 4, 8}
 
-func (i Format) String() string {
-	idx := int(i) - 1
-	if i < 1 || idx >= len(_Format_index)-1 {
-		return "Format(" + strconv.FormatInt(int64(i), 10) + ")"
+func (f Format) String() string {
+	idx := int(f) - 1
+	if f < 1 || idx >= len(_Format_index)-1 {
+		return "Format(" + strconv.FormatInt(int64(f), 10) + ")"
 	}
 	return _Format_name[_Format_index[idx]:_Format_index[idx+1]]
 }

@@ -19,10 +19,10 @@ const _Level_name = "errorwarninfodebugtrace"
 
 var _Level_index = [...]uint8{0, 5, 9, 13, 18, 23}
 
-func (i Level) String() string {
-	idx := int(i) - 1
-	if i < 1 || idx >= len(_Level_index)-1 {
-		return "Level(" + strconv.FormatInt(int64(i), 10) + ")"
+func (l Level) String() string {
+	idx := int(l) - 1
+	if l < 1 || idx >= len(_Level_index)-1 {
+		return "Level(" + strconv.FormatInt(int64(l), 10) + ")"
 	}
 	return _Level_name[_Level_index[idx]:_Level_index[idx+1]]
 }
