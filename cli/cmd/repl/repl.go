@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
@@ -102,6 +103,9 @@ var helpTopics = []helpTopic{
 			"Keybindings:",
 			slicePairs[string]{
 				{{"Esc"}, {"Toggle evaluation or command mode"}},
+				{{"Alt+E"}, {"Toggle multiline/single-line input mode"}},
+				{{"Enter"}, {"Insert newline (multiline) or submit (single-line)"}},
+				{{"Alt+Enter"}, {"Submit input in multiline mode"}},
 				{{"Tab"}, {"Cycle completions forward"}},
 				{{"Shift+Tab"}, {"Cycle completions backward"}},
 				{{"↑ / ↓"}, {"Navigate all history", " (mode follows entry)"}},
@@ -351,7 +355,7 @@ func formatCtrlCommand(input string) string {
 // model is the Bubble Tea model for the REPL.
 type model struct {
 	ctxFunc          func() context.Context
-	input            textinput.Model
+	edit             TextEdit
 	ast              *lang.AST
 	logger           log.Logger
 	history          *History
@@ -455,15 +459,12 @@ func newModel(
 	history *History,
 	logger log.Logger,
 ) model {
-	ti := textinput.New()
-	ti.Prompt = promptStyle.Render(evalPrompt)
-	ti.Focus()
-	ti.CharLimit = 1024
-	ti.Width = defaultWidth
+	edit := makeTextEdit(promptStyle.Render(evalPrompt), defaultWidth)
+	edit.Focus()
 
 	return model{
 		ctxFunc:    func() context.Context { return ctx },
-		input:      ti,
+		edit:       edit,
 		ast:        ast,
 		logger:     logger,
 		history:    history,
@@ -478,7 +479,7 @@ func (m model) Init() tea.Cmd {
 		fmt.Sprintf("%s version %s", pkg.Name, strings.TrimSpace(pkg.Version)),
 	)
 
-	return tea.Batch(textinput.Blink, tea.Println(banner))
+	return tea.Batch(textinput.Blink, textarea.Blink, tea.Println(banner))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -488,7 +489,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.input.Width = msg.Width - len(evalPrompt) - 2
+		m.edit.SetWidth(msg.Width - len(evalPrompt) - 2)
 
 		return m, nil
 
@@ -535,7 +536,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 
-	m.input, cmd = m.input.Update(msg)
+	m.edit, cmd = m.edit.Update(msg)
 
 	return m, cmd
 }
@@ -548,17 +549,17 @@ func (m model) View() string {
 	var b strings.Builder
 
 	// Input line.
-	b.WriteString(m.input.View())
+	b.WriteString(m.edit.View())
 	b.WriteString("\n")
 
 	// Completion / hint line.
-	input := m.input.Value()
+	input := m.edit.Value()
 
 	// Check if we're viewing history
 	viewingHistory := m.historyIdx < m.history.Len()
 
 	// Check if cursor is inside a function call
-	cursor := m.input.Position()
+	cursor := m.edit.Position()
 	funcCall := detectFunctionCall(input, cursor)
 
 	switch {
@@ -575,16 +576,26 @@ func (m model) View() string {
 	case strings.TrimSpace(input) == "":
 		// Empty or whitespace-only input: show hint.
 		escKey := suggestionStyle.Render(`Esc`)
+		toggleKey := suggestionStyle.Render(`Alt+E`)
 
 		var hint string
 		if m.mode == modeEval {
-			hint = fmt.Sprintf(
-				"Enter an expression to evaluate  •  %s toggle command mode",
-				escKey,
-			)
+			if m.edit.Mode() == editArea {
+				hint = fmt.Sprintf(
+					"Enter adds newline  •  Alt+Enter evaluates  •  %s toggle command mode  •  %s toggle input mode",
+					escKey,
+					toggleKey,
+				)
+			} else {
+				hint = fmt.Sprintf(
+					"Enter an expression to evaluate  •  %s toggle command mode  •  %s toggle input mode",
+					escKey,
+					toggleKey,
+				)
+			}
 		} else {
 			hint = strings.Join(ctrlCommands, "  ") +
-				fmt.Sprintf("  •  %s return to eval mode", escKey)
+				fmt.Sprintf("  •  %s return to eval mode  •  %s toggle input mode", escKey, toggleKey)
 		}
 
 		b.WriteString(hintStyle.Render(hint))
@@ -653,13 +664,13 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case tea.KeyCtrlC:
-		if m.input.Value() == "" {
+		if m.edit.Value() == "" {
 			m.quitting = true
 
 			return m, tea.Quit
 		}
 
-		m.input.SetValue("")
+		m.edit.SetValue("")
 		m.tabActive = false
 		m.altNavActive = false
 		m.historyIdx = m.history.Len()
@@ -673,17 +684,28 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEnter:
-		if !m.tabActive || len(m.matches) == 0 {
+		if m.edit.Mode() == editArea {
+			if msg.Alt {
+				m.altNavActive = false
+
+				return m.executeInput()
+			}
+
+			m.tabActive = false
 			m.altNavActive = false
+			m.historyIdx = m.history.Len()
 
-			return m.executeInput()
+			var cmd tea.Cmd
+
+			m.edit, cmd = m.edit.Update(msg)
+			refreshMatches(&m, false)
+
+			return m, cmd
 		}
-		// Lock in the current tab candidate without executing.
-		m.tabActive = false
-		m.altNavActive = false
-		refreshMatches(&m, true)
 
-		return m, nil
+		m.altNavActive = false
+
+		return m.executeInput()
 
 	case tea.KeyTab:
 		return m.handleTab()
@@ -713,15 +735,15 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 	case tea.KeyBackspace:
 		// Backspace at column 0 in command mode returns to eval mode.
-		if m.mode == modeCtrl && m.input.Position() == 0 {
+		if m.mode == modeCtrl && m.edit.Position() == 0 {
 			return m.switchToMode(modeEval)
 		}
 
 	case tea.KeyEsc:
 		if m.tabActive {
 			m.tabActive = false
-			m.input.SetValue(m.preTabText)
-			m.input.SetCursor(m.preTabCursor)
+			m.edit.SetValue(m.preTabText)
+			m.edit.SetCursor(m.preTabCursor)
 			refreshMatches(&m, false)
 
 			return m, nil
@@ -734,6 +756,16 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m.toggleMode()
 
 	case tea.KeyRunes:
+		if msg.Alt && len(msg.Runes) == 1 &&
+			(msg.Runes[0] == 'e' || msg.Runes[0] == 'E') {
+			m.edit.ToggleMode()
+			m.tabActive = false
+			m.altNavActive = false
+			refreshMatches(&m, false)
+
+			return m, nil
+		}
+
 		// Check for space as "breaking" key while tab-cycling.
 		if m.tabActive && msg.String() == " " {
 			m.tabActive = false
@@ -743,14 +775,14 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 		// Reset history index when typing
 		m.historyIdx = m.history.Len()
-		m.input, cmd = m.input.Update(msg)
+		m.edit, cmd = m.edit.Update(msg)
 
 		// ":" as the sole non-whitespace input in eval mode is a shortcut to
 		// switch to command mode. The colon itself is discarded — it is not
 		// echoed, not added to history, and does not appear as the initial
 		// text in command mode.
-		if m.mode == modeEval && strings.TrimSpace(m.input.Value()) == ":" {
-			m.input.SetValue("")
+		if m.mode == modeEval && strings.TrimSpace(m.edit.Value()) == ":" {
+			m.edit.SetValue("")
 			m.tabActive = false
 
 			return m.switchToMode(modeCtrl)
@@ -769,7 +801,7 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	m.altNavActive = false
 	// Reset history index when typing
 	m.historyIdx = m.history.Len()
-	m.input, cmd = m.input.Update(msg)
+	m.edit, cmd = m.edit.Update(msg)
 	refreshMatches(&m, false)
 
 	return m, cmd
@@ -781,13 +813,13 @@ func (m model) handleTab() (model, tea.Cmd) {
 	// of starting to cycle through candidates.
 	if !m.tabActive {
 		if suffix, ok := m.tryTabFinish(); ok {
-			input := m.input.Value()
-			cursor := m.input.Position()
+			input := m.edit.Value()
+			cursor := m.edit.Position()
 			newInput := input[:cursor] + suffix + input[cursor:]
 			newCursor := cursor + len(suffix)
 
-			m.input.SetValue(newInput)
-			m.input.SetCursor(newCursor)
+			m.edit.SetValue(newInput)
+			m.edit.SetCursor(newCursor)
 			m.tabActive = false
 			m.suggIdx = -1
 			m.matches = nil
@@ -823,8 +855,8 @@ func (m model) handleTab() (model, tea.Cmd) {
 		}
 	} else {
 		m.tabActive = true
-		m.preTabText = m.input.Value()
-		m.preTabCursor = m.input.Position()
+		m.preTabText = m.edit.Value()
+		m.preTabCursor = m.edit.Position()
 		m.suggIdx = 0
 	}
 
@@ -858,8 +890,8 @@ func (m model) handleShiftTab() (model, tea.Cmd) {
 		}
 	} else {
 		m.tabActive = true
-		m.preTabText = m.input.Value()
-		m.preTabCursor = m.input.Position()
+		m.preTabText = m.edit.Value()
+		m.preTabCursor = m.edit.Position()
 		m.suggIdx = len(m.matches) - 1
 	}
 
@@ -897,12 +929,12 @@ func populateAllMatches(m *model) bool {
 	// that replaceCurrentWord only replaces the word under the cursor, not
 	// the entire input. This is critical when Tab is pressed inside a
 	// function argument list (e.g., "filter(keys(|), foo)").
-	_, ws, we := wordBounds(m.input.Value(), m.input.Position())
+	_, ws, we := wordBounds(m.edit.Value(), m.edit.Position())
 	m.wordStart = ws
 	m.wordEnd = we
 
 	// Apply type-based filtering when inside a function call.
-	fc := detectFunctionCall(m.input.Value(), m.input.Position())
+	fc := detectFunctionCall(m.edit.Value(), m.edit.Position())
 	if fc.inCall {
 		all = filterByParamType(all, m.ast, fc)
 		if len(all) == 0 {
@@ -918,12 +950,12 @@ func populateAllMatches(m *model) bool {
 // replaceCurrentWord replaces the current word boundaries in the input with
 // the given replacement text and repositions the cursor.
 func replaceCurrentWord(m *model, replacement string) {
-	input := m.input.Value()
+	input := m.edit.Value()
 	newInput := input[:m.wordStart] + replacement + input[m.wordEnd:]
 	newCursor := m.wordStart + len(replacement)
 
-	m.input.SetValue(newInput)
-	m.input.SetCursor(newCursor)
+	m.edit.SetValue(newInput)
+	m.edit.SetCursor(newCursor)
 
 	// Update word boundaries for the replaced text.
 	m.wordEnd = newCursor
@@ -941,7 +973,7 @@ func refreshMatches(m *model, autoConfirm bool) {
 	// candidates are narrowed to those compatible with the expected
 	// parameter type (e.g., only callables for predicate arguments).
 	if m.mode == modeEval {
-		fc := detectFunctionCall(m.input.Value(), m.input.Position())
+		fc := detectFunctionCall(m.edit.Value(), m.edit.Position())
 		if fc.inCall {
 			m.matches = filterByParamType(m.matches, m.ast, fc)
 		}
@@ -957,7 +989,7 @@ func refreshMatches(m *model, autoConfirm bool) {
 
 	// Auto-confirm when the typed word already equals the sole candidate.
 	candidate := m.matches[0].Str
-	word := m.input.Value()[m.wordStart:m.wordEnd]
+	word := m.edit.Value()[m.wordStart:m.wordEnd]
 
 	if word == candidate {
 		replaceCurrentWord(m, candidate)
@@ -968,7 +1000,7 @@ func refreshMatches(m *model, autoConfirm bool) {
 }
 
 func (m model) executeInput() (model, tea.Cmd) {
-	input := strings.TrimSpace(m.input.Value())
+	input := strings.TrimSpace(m.edit.Value())
 	if input == "" {
 		return m, nil
 	}
@@ -978,7 +1010,7 @@ func (m model) executeInput() (model, tea.Cmd) {
 	m.evalCursor = 0
 	m.ctrlText = ""
 	m.ctrlCursor = 0
-	m.input.SetValue("")
+	m.edit.SetValue("")
 
 	if m.mode == modeCtrl {
 		// Control mode - add to history and execute command
@@ -1144,8 +1176,8 @@ func (m model) historyPrev() (model, tea.Cmd) {
 				m, _ = m.switchToMode(entry.Mode)
 			}
 
-			m.input.SetValue(entry.Line)
-			m.input.SetCursor(len(entry.Line))
+			m.edit.SetValue(entry.Line)
+			m.edit.SetCursor(len(entry.Line))
 			refreshMatches(&m, false)
 		}
 	}
@@ -1163,13 +1195,13 @@ func (m model) historyNext() (model, tea.Cmd) {
 				m, _ = m.switchToMode(entry.Mode)
 			}
 
-			m.input.SetValue(entry.Line)
-			m.input.SetCursor(len(entry.Line))
+			m.edit.SetValue(entry.Line)
+			m.edit.SetCursor(len(entry.Line))
 			refreshMatches(&m, false)
 		}
 	} else {
 		m.historyIdx = m.history.Len()
-		m.input.SetValue("")
+		m.edit.SetValue("")
 		refreshMatches(&m, false)
 	}
 
@@ -1183,8 +1215,8 @@ func (m model) historyPrevInMode() (model, tea.Cmd) {
 		if entry, err := m.history.GetEntry(i); err == nil {
 			if entry.Mode == currentMode {
 				m.historyIdx = i
-				m.input.SetValue(entry.Line)
-				m.input.SetCursor(len(entry.Line))
+				m.edit.SetValue(entry.Line)
+				m.edit.SetCursor(len(entry.Line))
 				refreshMatches(&m, false)
 
 				return m, nil
@@ -1202,8 +1234,8 @@ func (m model) historyNextInMode() (model, tea.Cmd) {
 		if entry, err := m.history.GetEntry(i); err == nil {
 			if entry.Mode == currentMode {
 				m.historyIdx = i
-				m.input.SetValue(entry.Line)
-				m.input.SetCursor(len(entry.Line))
+				m.edit.SetValue(entry.Line)
+				m.edit.SetCursor(len(entry.Line))
 				refreshMatches(&m, false)
 
 				return m, nil
@@ -1214,7 +1246,7 @@ func (m model) historyNextInMode() (model, tea.Cmd) {
 	// Reached end of mode-specific history, clear input
 	if m.historyIdx < m.history.Len() {
 		m.historyIdx = m.history.Len()
-		m.input.SetValue("")
+		m.edit.SetValue("")
 		refreshMatches(&m, false)
 	}
 
@@ -1226,8 +1258,8 @@ func (m model) historyPrevCtrl() (model, tea.Cmd) {
 	if !m.altNavActive {
 		m.altNavActive = true
 		m.altNavOrigMode = m.mode
-		m.altNavOrigText = m.input.Value()
-		m.altNavOrigCursor = m.input.Position()
+		m.altNavOrigText = m.edit.Value()
+		m.altNavOrigCursor = m.edit.Position()
 
 		// Switch to command mode if not already there
 		if m.mode != modeCtrl {
@@ -1239,8 +1271,8 @@ func (m model) historyPrevCtrl() (model, tea.Cmd) {
 		if entry, err := m.history.GetEntry(i); err == nil {
 			if entry.Mode == modeCtrl {
 				m.historyIdx = i
-				m.input.SetValue(entry.Line)
-				m.input.SetCursor(len(entry.Line))
+				m.edit.SetValue(entry.Line)
+				m.edit.SetCursor(len(entry.Line))
 				refreshMatches(&m, false)
 
 				return m, nil
@@ -1255,8 +1287,8 @@ func (m model) historyPrevCtrl() (model, tea.Cmd) {
 			m, _ = m.switchToMode(m.altNavOrigMode)
 		}
 
-		m.input.SetValue(m.altNavOrigText)
-		m.input.SetCursor(m.altNavOrigCursor)
+		m.edit.SetValue(m.altNavOrigText)
+		m.edit.SetCursor(m.altNavOrigCursor)
 		m.historyIdx = m.history.Len()
 		refreshMatches(&m, false)
 	}
@@ -1269,8 +1301,8 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 	if !m.altNavActive {
 		m.altNavActive = true
 		m.altNavOrigMode = m.mode
-		m.altNavOrigText = m.input.Value()
-		m.altNavOrigCursor = m.input.Position()
+		m.altNavOrigText = m.edit.Value()
+		m.altNavOrigCursor = m.edit.Position()
 
 		// Switch to command mode if not already there
 		if m.mode != modeCtrl {
@@ -1282,8 +1314,8 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 		if entry, err := m.history.GetEntry(i); err == nil {
 			if entry.Mode == modeCtrl {
 				m.historyIdx = i
-				m.input.SetValue(entry.Line)
-				m.input.SetCursor(len(entry.Line))
+				m.edit.SetValue(entry.Line)
+				m.edit.SetCursor(len(entry.Line))
 				refreshMatches(&m, false)
 
 				return m, nil
@@ -1298,8 +1330,8 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 			m, _ = m.switchToMode(m.altNavOrigMode)
 		}
 
-		m.input.SetValue(m.altNavOrigText)
-		m.input.SetCursor(m.altNavOrigCursor)
+		m.edit.SetValue(m.altNavOrigText)
+		m.edit.SetCursor(m.altNavOrigCursor)
 		m.historyIdx = m.history.Len()
 		refreshMatches(&m, false)
 	}
@@ -1359,11 +1391,11 @@ func (m model) listNamespaces() string {
 func (m model) toggleMode() (model, tea.Cmd) {
 	// Save current mode's input
 	if m.mode == modeEval {
-		m.evalText = m.input.Value()
-		m.evalCursor = m.input.Position()
+		m.evalText = m.edit.Value()
+		m.evalCursor = m.edit.Position()
 	} else {
-		m.ctrlText = m.input.Value()
-		m.ctrlCursor = m.input.Position()
+		m.ctrlText = m.edit.Value()
+		m.ctrlCursor = m.edit.Position()
 	}
 
 	// Toggle mode
@@ -1378,23 +1410,23 @@ func (m model) toggleMode() (model, tea.Cmd) {
 func (m model) switchToMode(mode inputMode) (model, tea.Cmd) {
 	// Save current mode's input
 	if m.mode == modeEval {
-		m.evalText = m.input.Value()
-		m.evalCursor = m.input.Position()
+		m.evalText = m.edit.Value()
+		m.evalCursor = m.edit.Position()
 	} else {
-		m.ctrlText = m.input.Value()
-		m.ctrlCursor = m.input.Position()
+		m.ctrlText = m.edit.Value()
+		m.ctrlCursor = m.edit.Position()
 	}
 
 	// Switch to target mode
 	m.mode = mode
 	if mode == modeEval {
-		m.input.Prompt = promptStyle.Render(evalPrompt)
-		m.input.SetValue(m.evalText)
-		m.input.SetCursor(m.evalCursor)
+		m.edit.SetPrompt(promptStyle.Render(evalPrompt))
+		m.edit.SetValue(m.evalText)
+		m.edit.SetCursor(m.evalCursor)
 	} else {
-		m.input.Prompt = ctrlPromptStyle.Render(ctrlPrompt)
-		m.input.SetValue(m.ctrlText)
-		m.input.SetCursor(m.ctrlCursor)
+		m.edit.SetPrompt(ctrlPromptStyle.Render(ctrlPrompt))
+		m.edit.SetValue(m.ctrlText)
+		m.edit.SetCursor(m.ctrlCursor)
 	}
 
 	refreshMatches(&m, false)

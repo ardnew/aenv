@@ -217,8 +217,8 @@ func (m model) computeMatches() (
 	candidates []string,
 	wordStart, wordEnd int,
 ) {
-	input := m.input.Value()
-	cursor := m.input.Position()
+	input := m.edit.Value()
+	cursor := m.edit.Position()
 
 	word, ws, we := wordBounds(input, cursor)
 	wordStart, wordEnd = ws, we
@@ -656,8 +656,8 @@ func formatValuePreview(v *lang.Value) string {
 // value is false when tab-finish does not apply (word is empty, cursor is not
 // at the end of the word, word is not a candidate, etc.).
 func (m model) tryTabFinish() (string, bool) {
-	input := m.input.Value()
-	cursor := m.input.Position()
+	input := m.edit.Value()
+	cursor := m.edit.Position()
 
 	word, ws, we := wordBounds(input, cursor)
 	if word == "" || cursor != we {
