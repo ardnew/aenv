@@ -1,30 +1,24 @@
 // filepath: .vscode/settings.json
 {
-  "code-runner.fileDirectoryAsCwd": true,
-  "code-runner.ignoreSelection": true,
-  "code-runner.saveFileBeforeRun": true,
-  "code-runner.executorMapByGlob": {},
-
   "go.terminal.activateEnvironment": false,
 
   "go.buildFlags": [
     "-v",
-    "-tags=pprof",
-    "-gcflags=-N -l"
+    // "-tags=pprof",
+    // "-gcflags=-N -l"
   ],
   "go.toolsEnvVars": {
     "TMPDIR": "",
-    "GOEXPERIMENT": "greenteagc",
+    "GOEXPERIMENT": "goroutineleakprofile",
   },
 
   "go.testFlags": [
-    "-v",
-    "-tags=test,pprof",
-    "-timeout=30s",
+    // "-v",
+    // "-tags=pprof",
   ],
   "go.testEnvVars": {
     "TMPDIR": "",
-    "GOEXPERIMENT": "greenteagc",
+    "GOEXPERIMENT": "goroutineleakprofile",
   },
 
   "go.diagnostic.vulncheck": "Imports",
@@ -50,12 +44,12 @@
 
   "gopls": {
     "build.buildFlags": [
-      "-tags=pprof",
-      "-gcflags=-N -l"
+      // "-tags=pprof",
+      // "-gcflags=-N -l"
     ],
     "build.env": {
       "TMPDIR": "",
-      "GOEXPERIMENT": "greenteagc",
+      "GOEXPERIMENT": "goroutineleakprofile",
     },
     "formatting.local": "github.com/ardnew/aenv",
     "ui.codelenses": {
@@ -105,4 +99,5 @@
     "editor.formatOnSave": true
   },
   "git.ignoreLimitWarning": true,
+  "sarif-viewer.connectToGithubCodeScanning": "off",
 }

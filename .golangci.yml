@@ -5,15 +5,16 @@ linters:
   disable:
     - unparam
     - depguard
-    - nonamedreturns
     - varnamelen
     - wrapcheck
-    - forbidigo
-    - gocritic
     - gocyclo
     - cyclop
     - funlen
     - wsl
+    - exhaustive
+    - exhaustruct
+    - nilnil
+    - noinlineerr
   enable:
     - wsl_v5
   settings:
@@ -42,16 +43,6 @@ linters:
           - gochecknoglobals
           - mnd
         source: "^(var|const)?\\s+(([dD]efault|[gG]lobal)\\w*\\s*(=|[\\w\\.]+)|\\w+\\s*=\\s*sync\\.Once)"
-
-      # Magic number in runtime.Callers frame skip
-      - linters:
-          - mnd
-        source: "runtime\\.Callers\\(4,"
-
-      # Exhaustruct for partial struct literals of external types
-      - linters:
-          - exhaustruct
-        source: "slog\\.Attr\\{\\}|kong\\.HelpOptions\\{"
 
       # Globals that are maps of profiling functions
       - linters:
@@ -92,15 +83,29 @@ linters:
         source: "0o644"
         path: cli/log\.go
 
+      # Literal comparison strings for arg parsing are idiomatic
+      - linters:
+          - goconst
+        source: '(arg == "(true|false)"|return "nil")'
+        path: lang/(eval|scan)\.go
+
+      # REPL editor: tmpPath from os.CreateTemp is safe
+      - linters:
+          - gosec
+        source: "os\\.WriteFile\\(tmpPath"
+        path: cli/cmd/repl/editor\.go
+
+      # REPL editor: $EDITOR is user-controlled by design
+      - linters:
+          - gosec
+        source: "exec\\.CommandContext\\(ctx, editor"
+        path: cli/cmd/repl/editor\.go
+
       # --- Path-based rules (file/package scoped) ---
 
       # Parser core: intentional patterns throughout
       - linters:
-          - exhaustruct
-          - noinlineerr
-          - exhaustive
           - err113
-          - nilnil
         path: lang/ast\.go
 
       # Functions with high cognitive complexity
@@ -113,24 +118,12 @@ linters:
           - nestif
         path: lang/format\.go
 
-      # Inline error handling is idiomatic in lang evaluator/serializer
-      - linters:
-          - noinlineerr
-          - nilnil
-        path: lang/(marshal|format|eval)\.go
-
       # Constructor and value-building code
       - linters:
-          - exhaustruct
           - mnd
           - nestif
           - gocognit
         path: (lang/(eval|marshal|error|value|parse)|cli/cmd/error)\.go
-
-      # Non-exhaustive switch on slog.Kind
-      - linters:
-          - exhaustive
-        path: log/pretty\.go
 
       # CLI: long lines from Kong struct tags
       - linters:
@@ -139,7 +132,6 @@ linters:
 
       # Resolver returns nil values and interfaces by design
       - linters:
-          - nilnil
           - ireturn
           - nilerr
         path: cli/resolver\.go
@@ -152,13 +144,10 @@ linters:
 
       # REPL: TUI application with framework-specific patterns
       - linters:
-          - exhaustive
-          - exhaustruct
           - gochecknoglobals
           - ireturn
           - mnd
           - nestif
-          - noinlineerr
         path: cli/cmd/repl/
 
       # Local go.mod replacements needed for development

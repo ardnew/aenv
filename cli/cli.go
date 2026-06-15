@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 
 	"github.com/alecthomas/kong"
 
@@ -9,17 +10,24 @@ import (
 	"github.com/ardnew/aenv/pkg"
 )
 
-// CLI is the top-level command-line interface for aenv.
+// CLI is the top-level command-line interface for aenv,
+// containing global flags and subcommands.
 type CLI struct {
+	Var kong.VersionFlag `hidden:""`
+
 	Log   logConfig   `embed:"" group:"log"   prefix:"log-"`
 	Pprof pprofConfig `embed:"" group:"pprof" prefix:"pprof-"`
 
-	Source []string `help:"Include source file(s) ('-' for stdin)" placeholder:"PATH" short:"s" type:"existingfile"`
+	Verbose int  `help:"Increment log verbosity"           short:"v" type:"counter"`
+	Quiet   bool `help:"Suppress all output except errors" short:"q"                default:"false"`
 
-	Init cmd.Init `cmd:"" help:"Initialize configuration file"`
-	Fmt  cmd.Fmt  `cmd:"" help:"Format namespaces"`
+	Source []string `help:"Include source file(s) ('-' for stdin)" name:"file" placeholder:"PATH" short:"f" type:"existingfile"`
 
-	Eval cmd.Eval `cmd:"" default:"withargs" help:"Evaluate namespaces"`
+	Init    cmd.Init    `cmd:"" help:"Initialize configuration file"`
+	Fmt     cmd.Fmt     `cmd:"" help:"Format source files"`
+	Eval    cmd.Eval    `cmd:"" help:"Evaluate configuration and print results"           default:"withargs"`
+	Env     cmd.Env     `cmd:"" help:"Evaluate namespace and print environment variables"`
+	Version cmd.Version `cmd:"" help:"Print version information"`
 }
 
 // Run executes the aenv CLI with the given context and arguments.
@@ -39,8 +47,9 @@ func Run(
 	configFilePath := configPath(baseConfig)
 
 	vars := kong.Vars{
-		cmd.ConfigIdentifier: configFilePath,
-		cmd.CacheIdentifier:  cacheDir(),
+		cmd.ConfigIdentifier:  configFilePath,
+		cmd.CacheIdentifier:   cacheDir(),
+		cmd.VersionIdentifier: strings.TrimSpace(pkg.Version),
 	}.
 		CloneWith(cli.Log.vars()).
 		CloneWith(cli.Pprof.vars())
@@ -92,18 +101,16 @@ func Run(
 	// Stuff additional context values for use by commands
 	ctx = cmd.WithContext(ctx, ktx)
 	// Always include the aenv config file as the first source so its
-	// environment is available in every eval and REPL session.
+	// environment is available to all subcommands.
 	ctx = cmd.WithSourceFiles(
 		ctx,
 		append([]string{configFilePath}, cli.Source...),
 	)
-	// Store only the user-specified sources for commands like fmt that
-	// should not include the implicitly added config file.
-	ctx = cmd.WithExplicitSourceFiles(ctx, cli.Source)
+	ctx = cmd.WithHasUserSources(ctx, len(cli.Source) > 0)
 
 	// Finalize logger configuration with all parsed values including
 	// TimeLayout and Caller which don't use TextUnmarshaler.
-	defer cli.Log.start(ctx)()
+	defer cli.Log.start(ctx, cli.Verbose, cli.Quiet)()
 
 	// [pprofConfig.start] is no-op unless built with tag pprof and enabled.
 	defer cli.Pprof.start(ctx)()

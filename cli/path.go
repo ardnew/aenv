@@ -26,6 +26,7 @@ var defaultDirMode os.FileMode = 0o700
 var basePrefix = sync.OnceValue(
 	func() string {
 		id := os.Args[0]
+
 		exe, err := os.Executable()
 		if err == nil {
 			id = exe
@@ -55,6 +56,7 @@ var configDir = sync.OnceValue(
 				dir = filepath.Join(dir, ".config")
 			} else {
 				var err error
+
 				dir, err = os.Getwd()
 				if err != nil {
 					dir = "."
@@ -76,6 +78,7 @@ var cacheDir = sync.OnceValue(
 				dir = filepath.Join(dir, ".cache")
 			} else {
 				var err error
+
 				dir, err = os.Getwd()
 				if err != nil {
 					dir = "."

@@ -8,7 +8,7 @@ import (
 	"github.com/alecthomas/kong"
 )
 
-// pprof is empty when built without pprof tag.
+// pprofConfig is empty when built without the pprof build tag.
 type pprofConfig struct{}
 
 func (pprofConfig) vars() kong.Vars { return kong.Vars{} }

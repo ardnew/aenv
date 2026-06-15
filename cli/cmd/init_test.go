@@ -219,7 +219,7 @@ func TestInitFlagValue(t *testing.T) {
 			flagName:  "flag-strings",
 			flagValue: []string{"a", "b", "c"},
 			wantNil:   false,
-			wantKind:  lang.KindBlock,
+			wantKind:  lang.KindExpr,
 		},
 		{
 			name:      "empty_slice",
@@ -232,7 +232,7 @@ func TestInitFlagValue(t *testing.T) {
 			flagName:  "flag-ints",
 			flagValue: []int{1, 2, 3},
 			wantNil:   false,
-			wantKind:  lang.KindBlock,
+			wantKind:  lang.KindExpr,
 		},
 	}
 

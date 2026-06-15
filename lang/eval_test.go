@@ -335,7 +335,7 @@ func TestEvaluateNamespace_BuiltinFunctions(t *testing.T) {
 	}{
 		{
 			name:   "cwd",
-			input:  `dir : cwd()`,
+			input:  `dir : fs.cwd()`,
 			nsName: "dir",
 			check: func(t *testing.T, result any) {
 				if _, ok := result.(string); !ok {
@@ -345,7 +345,7 @@ func TestEvaluateNamespace_BuiltinFunctions(t *testing.T) {
 		},
 		{
 			name:   "platform",
-			input:  `plat : platform.OS`,
+			input:  `plat : platform.os`,
 			nsName: "plat",
 			check: func(t *testing.T, result any) {
 				if _, ok := result.(string); !ok {
@@ -446,11 +446,52 @@ func TestEvaluateNamespace_ParameterCountMismatch(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing parameter, got nil")
 	}
+}
 
-	// Too many arguments
-	_, err = ast.EvaluateNamespace(context.Background(), "greet", []string{"Alice", "Bob"})
-	if err == nil {
-		t.Error("expected error for too many parameters, got nil")
+func TestEvaluateNamespace_ExtraArgsIgnored(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		nsName   string
+		args     []string
+		expected any
+	}{
+		{
+			name:     "one_param_two_args",
+			input:    `greet name : "Hello, " + name`,
+			nsName:   "greet",
+			args:     []string{"Alice", "Bob"},
+			expected: "Hello, Alice",
+		},
+		{
+			name:     "no_param_extra_arg",
+			input:    `x : 42`,
+			nsName:   "x",
+			args:     []string{"extra"},
+			expected: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ast, err := ParseString(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateNamespace(context.Background(), tt.nsName, tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
 	}
 }
 
@@ -534,6 +575,90 @@ func TestEvaluateExpr_FunctionSignatureInError(t *testing.T) {
 	}
 }
 
+func TestEvaluateExpr_BuiltinAsVariable(t *testing.T) {
+	t.Run("bare builtin returns FuncRef", func(t *testing.T) {
+		names := []string{"now", "len", "upper"}
+		for _, name := range names {
+			t.Run(name, func(t *testing.T) {
+				ast, err := ParseString(context.Background(), "")
+				if err != nil {
+					t.Fatalf("parse error: %v", err)
+				}
+
+				result, err := ast.EvaluateExpr(context.Background(), name)
+				if err != nil {
+					t.Fatalf("evaluate error: %v", err)
+				}
+
+				ref, ok := result.(*FuncRef)
+				if !ok {
+					t.Fatalf("expected *FuncRef, got %T (%v)", result, result)
+				}
+
+				if ref.Name != name {
+					t.Errorf("Name: expected %q, got %q", name, ref.Name)
+				}
+			})
+		}
+	})
+
+	t.Run("let binding calls builtin", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			source string
+			want   any
+		}{
+			{
+				name:   "upper via let",
+				source: `let x = upper; x("hello")`,
+				want:   "HELLO",
+			},
+			{
+				name:   "len via let",
+				source: `let x = len; x("abc")`,
+				want:   3,
+			},
+		}
+
+		ast, err := ParseString(context.Background(), "")
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result, err := ast.EvaluateExpr(context.Background(), tt.source)
+				if err != nil {
+					t.Fatalf("evaluate error: %v", err)
+				}
+
+				// expr-lang may return int or int64; compare loosely.
+				switch want := tt.want.(type) {
+				case string:
+					if result != want {
+						t.Errorf("expected %q, got %v (%T)", want, result, result)
+					}
+				case int:
+					switch got := result.(type) {
+					case int:
+						if got != want {
+							t.Errorf("expected %d, got %d", want, got)
+						}
+					case int64:
+						if got != int64(want) {
+							t.Errorf("expected %d, got %d", want, got)
+						}
+					default:
+						t.Errorf("expected int-like, got %T (%v)", result, result)
+					}
+				default:
+					t.Errorf("unhandled want type %T", tt.want)
+				}
+			})
+		}
+	})
+}
+
 func TestEvaluateExpr_FunctionIdentifier_ReturnsFuncRef(t *testing.T) {
 	input := `add x y : x + y`
 
@@ -560,6 +685,133 @@ func TestEvaluateExpr_FunctionIdentifier_ReturnsFuncRef(t *testing.T) {
 	if ref.Signature != "add(x, y)" {
 		t.Errorf("Signature: expected %q, got %q", "add(x, y)", ref.Signature)
 	}
+}
+
+func TestEvaluateExpr_NamespaceStoresFunction(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string // aenv source
+		expr   string // expression to evaluate
+		check  func(t *testing.T, result any)
+	}{
+		{
+			name:  "namespace stores upper",
+			input: `mynow : now`,
+			expr:  `mynow()`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				if result == nil {
+					t.Fatal("expected non-nil time result")
+				}
+			},
+		},
+		{
+			name:  "namespace stores upper function",
+			input: `up : upper`,
+			expr:  `up("hello")`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				if result != "HELLO" {
+					t.Errorf("expected %q, got %v", "HELLO", result)
+				}
+			},
+		},
+		{
+			name:  "namespace stores user-defined function",
+			input: `add x y : x + y; a : add`,
+			expr:  `a(1, 2)`,
+			check: func(t *testing.T, result any) {
+				t.Helper()
+				switch v := result.(type) {
+				case int:
+					if v != 3 {
+						t.Errorf("expected 3, got %d", v)
+					}
+				case int64:
+					if v != 3 {
+						t.Errorf("expected 3, got %d", v)
+					}
+				default:
+					t.Errorf("expected int-like, got %T (%v)", result, result)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, err := ParseString(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateExpr(context.Background(), tt.expr)
+			if err != nil {
+				t.Fatalf("evaluate error: %v", err)
+			}
+
+			tt.check(t, result)
+		})
+	}
+}
+
+func TestEvaluateExpr_FunctionPassthrough(t *testing.T) {
+	t.Run("fs.cwd stored in namespace", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `f : fs.cwd`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `f()`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		s, ok := result.(string)
+		if !ok {
+			t.Fatalf("expected string, got %T (%v)", result, result)
+		}
+
+		if s == "" {
+			t.Error("expected non-empty cwd string")
+		}
+	})
+
+	t.Run("mung stored in namespace returns FuncRef", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `f : mung`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `f`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		ref, ok := result.(*FuncRef)
+		if !ok {
+			t.Fatalf("expected *FuncRef, got %T (%v)", result, result)
+		}
+
+		if ref.Name != "f" {
+			t.Errorf("Name: expected %q, got %q", "f", ref.Name)
+		}
+	})
+
+	t.Run("function inside a block", func(t *testing.T) {
+		ast, err := ParseString(context.Background(), `id : { up : upper }`)
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+
+		result, err := ast.EvaluateExpr(context.Background(), `id.up("hi")`)
+		if err != nil {
+			t.Fatalf("evaluate error: %v", err)
+		}
+
+		if result != "HI" {
+			t.Errorf("expected %q, got %v", "HI", result)
+		}
+	})
 }
 
 func TestValidateNamespaces(t *testing.T) {
@@ -626,5 +878,424 @@ func TestValidateNamespaces(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEvaluateNamespace_BlockShadowing(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		nsName   string
+		expected map[string]any
+	}{
+		{
+			name:   "block entry override",
+			input:  `config : { a : 1; b : 2 }; config : { a : 3 }`,
+			nsName: "config",
+			expected: map[string]any{
+				"a": 3,
+				"b": 2,
+			},
+		},
+		{
+			name:   "block entry addition",
+			input:  `config : { a : 1 }; config : { b : 2 }`,
+			nsName: "config",
+			expected: map[string]any{
+				"a": 1,
+				"b": 2,
+			},
+		},
+		{
+			name:   "nested block merge",
+			input:  `x : { inner : { a : 1; b : 2 } }; x : { inner : { a : 10 } }`,
+			nsName: "x",
+			expected: map[string]any{
+				"inner": map[string]any{
+					"a": 10,
+					"b": 2,
+				},
+			},
+		},
+		{
+			name:   "config log-level override",
+			input:  `config : { log-level : "info"; log-format : "json" }; config : { log-level : "TRACE" }`,
+			nsName: "config",
+			expected: map[string]any{
+				"log-level":  "TRACE",
+				"log-format": "json",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, err := ParseString(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			result, err := ast.EvaluateNamespace(
+				context.Background(), tt.nsName, nil,
+			)
+			if err != nil {
+				t.Fatalf("evaluate error: %v", err)
+			}
+
+			m, ok := result.(map[string]any)
+			if !ok {
+				t.Fatalf("expected map[string]any, got %T", result)
+			}
+
+			for key, want := range tt.expected {
+				got, exists := m[key]
+				if !exists {
+					t.Errorf("missing key %q", key)
+
+					continue
+				}
+
+				// Handle nested maps
+				if wantMap, isMap := want.(map[string]any); isMap {
+					gotMap, isGotMap := got.(map[string]any)
+					if !isGotMap {
+						t.Errorf("key %q: expected map, got %T", key, got)
+
+						continue
+					}
+
+					for k, wv := range wantMap {
+						if gv, ok := gotMap[k]; !ok {
+							t.Errorf("key %q.%q: missing", key, k)
+						} else if !valuesEqual(gv, wv) {
+							t.Errorf("key %q.%q: expected %v, got %v",
+								key, k, wv, gv)
+						}
+					}
+
+					continue
+				}
+
+				if !valuesEqual(got, want) {
+					t.Errorf("key %q: expected %v (%T), got %v (%T)",
+						key, want, want, got, got)
+				}
+			}
+		})
+	}
+}
+
+func TestEvaluateNamespace_ExprShadowing(t *testing.T) {
+	input := `x : 1; x : 2`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateNamespace(context.Background(), "x", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if !valuesEqual(result, 2) {
+		t.Errorf("expected 2, got %v (%T)", result, result)
+	}
+}
+
+func TestEvaluateExpr_BlockShadowing(t *testing.T) {
+	input := `config : { a : 1; b : 2 }; config : { a : 3 }`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateExpr(context.Background(), `config`)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+
+	if !valuesEqual(m["a"], 3) {
+		t.Errorf("expected a=3, got %v", m["a"])
+	}
+
+	if !valuesEqual(m["b"], 2) {
+		t.Errorf("expected b=2, got %v", m["b"])
+	}
+}
+
+// valuesEqual compares two values, handling int/int64 coercion.
+func valuesEqual(a, b any) bool {
+	// Handle int/int64 coercion
+	aInt, aIsInt := toInt64(a)
+	bInt, bIsInt := toInt64(b)
+
+	if aIsInt && bIsInt {
+		return aInt == bInt
+	}
+
+	return a == b
+}
+
+func toInt64(v any) (int64, bool) {
+	switch val := v.(type) {
+	case int:
+		return int64(val), true
+	case int64:
+		return val, true
+	default:
+		return 0, false
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_ForwardRefFails checks that a top-level
+// namespace cannot reference another namespace defined after it (forward ref).
+func TestEvaluateNamespace_LexicalScope_ForwardRefFails(t *testing.T) {
+	// server references port, but port is defined AFTER server.
+	input := `server : "localhost:" + string(port); port : 8080`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	_, err = a.EvaluateNamespace(context.Background(), "server", nil)
+	if err == nil {
+		t.Error("expected error for forward reference, got nil")
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_BackwardRefWorks checks that a top-level
+// namespace can reference another namespace defined before it (backward ref).
+func TestEvaluateNamespace_LexicalScope_BackwardRefWorks(t *testing.T) {
+	input := `port : 8080; server : "localhost:" + string(port)`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "server", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if result != "localhost:8080" {
+		t.Errorf("expected %q, got %v", "localhost:8080", result)
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_BlockForwardRefFails checks that a block
+// entry cannot reference a sibling defined after it (block-level forward ref).
+func TestEvaluateNamespace_LexicalScope_BlockForwardRefFails(t *testing.T) {
+	// y references x which is defined AFTER y in the block.
+	input := `config : { y : x + 1; x : 10 }`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	_, err = a.EvaluateNamespace(context.Background(), "config", nil)
+	if err == nil {
+		t.Error("expected error for block forward reference, got nil")
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_BlockBackwardRefWorks checks that a block
+// entry can reference a sibling defined before it (block-level backward ref).
+func TestEvaluateNamespace_LexicalScope_BlockBackwardRefWorks(t *testing.T) {
+	input := `config : { x : 10; y : x + 1 }`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "config", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+
+	if !valuesEqual(m["y"], 11) {
+		t.Errorf("expected y=11, got %v", m["y"])
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_OuterScopeVisibleInDescendant checks that
+// a top-level namespace is accessible from within a nested block.
+func TestEvaluateNamespace_LexicalScope_OuterScopeVisibleInDescendant(t *testing.T) {
+	input := `level : "info"; config : { log : { default : level } }`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "config", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+
+	log, ok := m["log"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected config.log to be map, got %T", m["log"])
+	}
+
+	if log["default"] != "info" {
+		t.Errorf("expected config.log.default=%q, got %v", "info", log["default"])
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_SelfRecursion checks that a parameterized
+// namespace can call itself recursively (self-reference is in scope via
+// inclusive visible slice).
+func TestEvaluateNamespace_LexicalScope_SelfRecursion(t *testing.T) {
+	input := `fib n : n <= 1 ? n : fib(n-1) + fib(n-2)`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "fib", []string{"7"})
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if !valuesEqual(result, 13) {
+		t.Errorf("expected fib(7)=13, got %v (%T)", result, result)
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_DuplicateBlockMergeUnchanged checks that
+// the duplicate block+block merging behaviour is unaffected by lexical scoping.
+func TestEvaluateNamespace_LexicalScope_DuplicateBlockMergeUnchanged(t *testing.T) {
+	input := `config : { a : 1; b : 2 }; config : { a : 3 }`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "config", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", result)
+	}
+
+	if !valuesEqual(m["a"], 3) {
+		t.Errorf("expected a=3, got %v", m["a"])
+	}
+
+	if !valuesEqual(m["b"], 2) {
+		t.Errorf("expected b=2, got %v", m["b"])
+	}
+}
+
+// TestEvaluateNamespace_LexicalScope_DuplicateExprShadowUnchanged checks that
+// the last duplicate expression wins (unchanged behaviour).
+func TestEvaluateNamespace_LexicalScope_DuplicateExprShadowUnchanged(t *testing.T) {
+	input := `x : 1; x : 2`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := a.EvaluateNamespace(context.Background(), "x", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if !valuesEqual(result, 2) {
+		t.Errorf("expected 2, got %v (%T)", result, result)
+	}
+}
+
+// TestEvaluateExpr_LexicalScope_SeesAllNamespaces checks that EvaluateExpr
+// (REPL mode) sees ALL namespaces regardless of definition order.
+func TestEvaluateExpr_LexicalScope_SeesAllNamespaces(t *testing.T) {
+	// server is defined before port, but EvaluateExpr has full scope.
+	input := `server : "localhost:" + string(port); port : 8080`
+
+	a, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// EvaluateExpr should succeed: it has unrestricted scope.
+	result, err := a.EvaluateExpr(context.Background(), "server")
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if result != "localhost:8080" {
+		t.Errorf("expected %q, got %v", "localhost:8080", result)
+	}
+}
+
+func TestEvaluateNamespace_SelectiveEval_TransitiveDep(t *testing.T) {
+	input := `a : 1; b : a + 1; c : b + 1; unused : 999`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateNamespace(context.Background(), "c", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	switch v := result.(type) {
+	case int:
+		if v != 3 {
+			t.Errorf("expected 3, got %v", v)
+		}
+	case int64:
+		if v != 3 {
+			t.Errorf("expected 3, got %v", v)
+		}
+	default:
+		t.Errorf("expected int, got %T: %v", result, result)
+	}
+}
+
+func TestEvaluateNamespace_SelectiveEval_HyphenatedName(t *testing.T) {
+	input := `log-level : "debug"; config : log-level`
+
+	ast, err := ParseString(context.Background(), input)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	result, err := ast.EvaluateNamespace(context.Background(), "config", nil)
+	if err != nil {
+		t.Fatalf("evaluate error: %v", err)
+	}
+
+	if result != "debug" {
+		t.Errorf("expected \"debug\", got %v", result)
 	}
 }

@@ -19,6 +19,7 @@ const (
 	typeNameString = "string"
 	typeNameArg    = "arg"
 	typeNameArray  = "array"
+	typeNameFunc   = "func"
 )
 
 // signatureCache stores precomputed function signatures to avoid repeated
@@ -286,7 +287,7 @@ func formatSemanticTypeName(
 			return "predicate"
 		}
 
-		return "func"
+		return typeNameFunc
 	case reflect.String:
 		return typeNameString
 	case reflect.Slice:
@@ -473,7 +474,12 @@ func getSignature(
 				finalName := segments[len(segments)-1]
 				for _, entry := range val.Entries {
 					if entry.Name == finalName {
-						return formatSignature(funcName, entry.Params), extractParamNames(entry.Params)
+						return formatSignature(
+								funcName,
+								entry.Params,
+							), extractParamNames(
+								entry.Params,
+							)
 					}
 				}
 			}
@@ -586,7 +592,7 @@ func getBuiltinSignatureUncached(funcName string) (string, []string, bool) {
 func formatTypeName(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.Func:
-		return "func"
+		return typeNameFunc
 	case reflect.String:
 		return typeNameString
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -676,12 +682,12 @@ func renderSignatureHint(
 	}
 
 	// Parse signature: "funcName(param1, param2, ...)"
-	openParen := strings.Index(signature, "(")
-	if openParen == -1 {
+	before, _, ok := strings.Cut(signature, "(")
+	if !ok {
 		return signatureStyle.Render(signature)
 	}
 
-	funcName := signature[:openParen]
+	funcName := before
 
 	closeParen := strings.LastIndex(signature, ")")
 	if closeParen == -1 {

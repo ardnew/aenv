@@ -13,14 +13,26 @@ import (
 func withSourceFile(t *testing.T, path string) context.Context {
 	t.Helper()
 
-	return WithExplicitSourceFiles(context.Background(), []string{path})
+	ctx := WithSourceFiles(context.Background(), []string{path})
+
+	return WithHasUserSources(ctx, true)
 }
 
 // withStdin creates a context configured to read from stdin for testing.
 func withStdin(t *testing.T) context.Context {
 	t.Helper()
 
-	return WithExplicitSourceFiles(context.Background(), []string{"-"})
+	ctx := WithSourceFiles(context.Background(), []string{"-"})
+
+	return WithHasUserSources(ctx, true)
+}
+
+// withNoSources creates a context with no explicit source files for testing.
+// This simulates invoking a fmt subcommand without -f flags.
+func withNoSources(t *testing.T) context.Context {
+	t.Helper()
+
+	return context.Background()
 }
 
 // TestNativeFmtValidSyntax tests that valid syntax is formatted correctly.
@@ -68,7 +80,7 @@ func TestNativeFmtValidSyntax(t *testing.T) {
 			}
 
 			// Run the command with context-based source
-			native := &Native{Indent: 2}
+			native := &Default{Indent: 2}
 			ctx := withSourceFile(t, tmpfile.Name())
 
 			err = native.Run(ctx)
@@ -131,7 +143,7 @@ func TestNativeFmtInvalidSyntax(t *testing.T) {
 			}
 
 			// Run the command with context-based source
-			native := &Native{Indent: 2}
+			native := &Default{Indent: 2}
 			ctx := withSourceFile(t, tmpfile.Name())
 
 			err = native.Run(ctx)
@@ -186,7 +198,7 @@ func TestNativeFmtStdin(t *testing.T) {
 			}()
 
 			// Run the command with stdin source
-			native := &Native{Indent: 2}
+			native := &Default{Indent: 2}
 			ctx := withStdin(t)
 
 			err = native.Run(ctx)
@@ -195,6 +207,34 @@ func TestNativeFmtStdin(t *testing.T) {
 				t.Errorf("Native.Run() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestNativeFmtStdinFallback tests that fmt reads from stdin when no -f flags
+// are provided.
+func TestNativeFmtStdinFallback(t *testing.T) {
+	// Save and restore stdin
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+
+	// Create a pipe to simulate stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+
+	// Write valid input to pipe
+	go func() {
+		defer w.Close()
+		io.WriteString(w, "test : 123")
+	}()
+
+	native := &Default{Indent: 2}
+	ctx := withNoSources(t)
+
+	if err := native.Run(ctx); err != nil {
+		t.Errorf("Default.Run() unexpected error = %v", err)
 	}
 }
 
@@ -409,7 +449,7 @@ func TestFormatASTOutput(t *testing.T) {
 			os.Stdout = w
 
 			// Run the command with context-based source
-			native := &Native{Indent: tt.indent}
+			native := &Default{Indent: tt.indent}
 			ctx := withSourceFile(t, tmpfile.Name())
 
 			err = native.Run(ctx)

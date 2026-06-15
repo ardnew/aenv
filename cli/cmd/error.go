@@ -77,8 +77,11 @@ func (e *Error) With(attrs ...slog.Attr) *Error {
 }
 
 var (
-	ErrJSONMarshal = NewError("marshal JSON")
-	ErrYAMLMarshal = NewError("marshal YAML")
-	ErrWriteConfig = NewError("write configuration file")
-	ErrFileExists  = NewError("file exists (use --force to overwrite)")
+	ErrJSONMarshal     = NewError("marshal JSON")
+	ErrYAMLMarshal     = NewError("marshal YAML")
+	ErrWriteConfig     = NewError("write configuration file")
+	ErrFileExists      = NewError("file exists (use --force to overwrite)")
+	ErrMissingCacheDir = NewError("unresolved cache directory")
+	ErrMissingConfig   = NewError("unresolved configuration namespace")
+	ErrNoSource        = NewError("no source files provided")
 )

@@ -15,7 +15,9 @@ import (
 )
 
 // ctrlCommands are the available control-mode commands.
-var ctrlCommands = []string{"help", "list", "edit", "clear", "quit"}
+const cmdHelp = "help"
+
+var ctrlCommands = []string{cmdHelp, "list", "edit", "clear", "quit"}
 
 // isWordBoundary returns true if the rune is a word delimiter for completion
 // purposes. This includes whitespace, the member-access dot, and expr-lang
@@ -129,8 +131,13 @@ func childCandidates(ast *lang.AST, parent string) []string {
 			len(ast.Namespaces)+len(builtinEnvKeys)+len(exprBuiltins),
 		)
 
+		seen := make(map[string]bool, len(ast.Namespaces))
+
 		for ns := range ast.All() {
-			names = append(names, ns.Name)
+			if !seen[ns.Name] {
+				seen[ns.Name] = true
+				names = append(names, ns.Name)
+			}
 		}
 
 		// Add all built-in environment keys
@@ -190,7 +197,7 @@ func childNames(v *lang.Value) []string {
 		return nil
 	}
 
-	var names []string
+	names := make([]string, 0, len(v.Entries))
 
 	for _, child := range v.Entries {
 		names = append(names, child.Name)
@@ -201,9 +208,10 @@ func childNames(v *lang.Value) []string {
 
 // computeMatches calculates the fuzzy match results for the word at the cursor.
 // It returns the matches (ranked best-first), the candidate list, and the word
-// boundaries. When the current word is empty at the top level, it returns nil
-// matches. When the word is empty after a dot (member access), it returns all
-// children as matches.
+// boundaries. In command mode, empty input returns all commands; after "help",
+// empty input returns all help topics. In expression mode, empty input at the
+// top level returns nil (to keep hint text visible) unless inside a function
+// call. After a dot, all children are returned immediately.
 func (m model) computeMatches() (
 	matches fuzzy.Matches,
 	candidates []string,
@@ -216,20 +224,37 @@ func (m model) computeMatches() (
 	wordStart, wordEnd = ws, we
 
 	if m.mode == modeCtrl {
-		if word == "" {
-			return nil, nil, wordStart, wordEnd
+		// When the first word is already "help" (or "h") and the user is
+		// typing a second word, offer help topic names as candidates.
+		prefix := strings.TrimSpace(input[:ws])
+		if prefix == cmdHelp || prefix == "h" {
+			candidates = helpTopicNames()
+		} else {
+			candidates = ctrlCommands
 		}
 
-		candidates = ctrlCommands
+		if word == "" {
+			// Return all candidates as unfiltered matches so the user can
+			// browse commands (empty input) or help topics (":help ").
+			matches = make(fuzzy.Matches, len(candidates))
+			for i, c := range candidates {
+				matches[i] = fuzzy.Match{Str: c, Index: i}
+			}
+
+			return matches, candidates, wordStart, wordEnd
+		}
 	} else {
 		parent := parentPath(input, wordStart)
 		candidates = childCandidates(m.ast, parent)
 
 		// When the word is empty at the top level, don't show completions
-		// (allows the hint text to be visible). After a dot, show all children
-		// immediately so the user can browse the available members.
+		// (allows the hint text to be visible) UNLESS we are inside a
+		// function call, where we always want candidates available for
+		// type-based filtering. After a dot, show all children immediately
+		// so the user can browse the available members.
 		if word == "" {
-			if parent == "" || len(candidates) == 0 {
+			inCall := detectFunctionCall(input, cursor).inCall
+			if (parent == "" && !inCall) || len(candidates) == 0 {
 				return nil, nil, wordStart, wordEnd
 			}
 
@@ -253,6 +278,82 @@ func (m model) computeMatches() (
 	sortMatchesByPriority(matches, m.ast)
 
 	return matches, candidates, wordStart, wordEnd
+}
+
+// getExpectedParamType returns the type name expected at argIndex for the
+// given function. For variadic parameters, the element type applies to all
+// subsequent arguments. Returns "" when no type information is available.
+func getExpectedParamType(ast *lang.AST, funcName string, argIndex int) string {
+	_, params := getSignature(ast, funcName)
+	if len(params) == 0 {
+		return ""
+	}
+
+	if argIndex < len(params) {
+		return strings.TrimPrefix(params[argIndex], "...")
+	}
+
+	// Beyond declared params: use last if variadic.
+	last := params[len(params)-1]
+	if after, ok := strings.CutPrefix(last, "..."); ok {
+		return after
+	}
+
+	return ""
+}
+
+// isCallableCandidate returns whether a candidate name represents something
+// callable: a parameterized namespace, an expr-lang builtin, or a project
+// builtin function.
+func isCallableCandidate(name string, ast *lang.AST) bool {
+	// Parameterized user-defined namespaces are callable.
+	if ns, ok := ast.GetNamespace(name); ok {
+		return len(ns.Params) > 0
+	}
+
+	// Expr-lang builtins and project builtin functions are callable.
+	return isFunction(name)
+}
+
+// filterByParamType filters completion matches based on the expected parameter
+// type at the current argument position. When the expected type is "predicate"
+// or "func", only callable candidates are kept. For all other types (or when
+// no type information is available), the matches are returned unchanged.
+func filterByParamType(
+	matches fuzzy.Matches,
+	ast *lang.AST,
+	fc functionCall,
+) fuzzy.Matches {
+	if len(matches) == 0 {
+		return matches
+	}
+
+	expectedType := getExpectedParamType(ast, fc.name, fc.argIndex)
+
+	// Generic or unknown types: no filtering.
+	switch expectedType {
+	case "", "v", "arg":
+		return matches
+	}
+
+	switch expectedType {
+	case "predicate", typeNameFunc:
+		// Only show callable candidates (parameterized namespaces, builtins).
+		filtered := make(fuzzy.Matches, 0, len(matches))
+
+		for _, m := range matches {
+			if isCallableCandidate(m.Str, ast) {
+				filtered = append(filtered, m)
+			}
+		}
+
+		if len(filtered) > 0 {
+			return filtered
+		}
+	}
+
+	// For value types or when filtering would empty the list, return all.
+	return matches
 }
 
 // matchPriority returns the sort priority for a completion candidate name:
@@ -294,11 +395,12 @@ func buildCandidateEntries(
 	matches fuzzy.Matches,
 	suggIdx int,
 	tabActive bool,
+	showCallHint bool,
 ) []candidateEntry {
 	entries := make([]candidateEntry, len(matches))
 
 	for i, match := range matches {
-		r := renderCandidate(match, tabActive && i == suggIdx)
+		r := renderCandidate(match, tabActive && i == suggIdx, showCallHint)
 		entries[i] = candidateEntry{r, lipgloss.Width(r)}
 	}
 
@@ -391,10 +493,13 @@ func renderCandidateBar(
 	suggIdx int,
 	tabActive bool,
 	width int,
+	showCallHint ...bool,
 ) string {
 	if len(matches) == 0 || width <= 0 {
 		return ""
 	}
+
+	hint := len(showCallHint) == 0 || showCallHint[0]
 
 	const sep = "  "
 
@@ -405,7 +510,7 @@ func renderCandidateBar(
 	leftArrowWidth := lipgloss.Width(leftArrow)
 	rightArrowWidth := lipgloss.Width(rightArrow)
 
-	entries := buildCandidateEntries(matches, suggIdx, tabActive)
+	entries := buildCandidateEntries(matches, suggIdx, tabActive, hint)
 
 	// Determine the visible window.
 	windowStart := 0
@@ -455,8 +560,9 @@ func renderCandidateBar(
 }
 
 // renderCandidate renders a single candidate with matched characters
-// highlighted. Functions are displayed with a "()" suffix.
-func renderCandidate(match fuzzy.Match, selected bool) string {
+// highlighted. When showCallHint is true, functions are displayed with
+// a "()" suffix.
+func renderCandidate(match fuzzy.Match, selected, showCallHint bool) string {
 	baseStyle := suggestionStyle
 	highlightStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("4")).
@@ -487,7 +593,7 @@ func renderCandidate(match fuzzy.Match, selected bool) string {
 	}
 
 	// Add "()" suffix for functions (not applied to actual completion)
-	if isFunction(match.Str) {
+	if showCallHint && isFunction(match.Str) {
 		b.WriteString(baseStyle.Render("()"))
 	}
 
@@ -500,7 +606,7 @@ func formatPreview(ns *lang.Namespace) string {
 
 	// Show parameters if any
 	if len(ns.Params) > 0 {
-		var params []string
+		params := make([]string, 0, len(ns.Params))
 
 		for _, p := range ns.Params {
 			paramName := p.Name
@@ -543,6 +649,96 @@ func formatValuePreview(v *lang.Value) string {
 	default:
 		return "<unknown>"
 	}
+}
+
+// tryTabFinish checks whether the word at the cursor is an exact candidate
+// match, and if so returns the contextual suffix to insert. The second return
+// value is false when tab-finish does not apply (word is empty, cursor is not
+// at the end of the word, word is not a candidate, etc.).
+func (m model) tryTabFinish() (string, bool) {
+	input := m.input.Value()
+	cursor := m.input.Position()
+
+	word, ws, we := wordBounds(input, cursor)
+	if word == "" || cursor != we {
+		return "", false
+	}
+
+	// Don't tab-finish when the next character indicates continuation
+	// (e.g., dot for member access, opening paren for existing call,
+	// closing paren for argument boundary, comma between arguments).
+	if cursor < len(input) {
+		next, _ := utf8.DecodeRuneInString(input[cursor:])
+		if next != ' ' && next != '\t' {
+			return "", false
+		}
+	}
+
+	var cands []string
+
+	if m.mode == modeCtrl {
+		prefix := strings.TrimSpace(input[:ws])
+		if prefix == cmdHelp || prefix == "h" {
+			cands = helpTopicNames()
+		} else {
+			cands = ctrlCommands
+		}
+	} else {
+		parent := parentPath(input, ws)
+		cands = childCandidates(m.ast, parent)
+	}
+
+	if !slices.Contains(cands, word) {
+		return "", false
+	}
+
+	// Command-mode completions are never callable — always space-separated.
+	if m.mode == modeCtrl {
+		return " ", true
+	}
+
+	return tabFinishSuffix(m.ast, input, cursor, word), true
+}
+
+// tabFinishSuffix returns the contextual text to insert when Tab-finishing on
+// a word that already matches a candidate exactly.
+//
+// Context rules:
+//   - Outside a function call: " " for non-callable, "(" for callable
+//   - Inside a function call, non-final argument: ", "
+//   - Inside a function call, variadic argument: ", "
+//   - Inside a function call, final non-variadic argument: ") "
+func tabFinishSuffix(
+	ast *lang.AST,
+	input string,
+	cursor int,
+	candidateName string,
+) string {
+	fc := detectFunctionCall(input, cursor)
+	if !fc.inCall {
+		if isCallableCandidate(candidateName, ast) {
+			return "("
+		}
+
+		return " "
+	}
+
+	// Inside a function call — determine argument finality.
+	_, params := getSignature(ast, fc.name)
+	if len(params) == 0 {
+		// Unknown or zero-arg signature; default to ", ".
+		return ", "
+	}
+
+	lastParam := params[len(params)-1]
+	isVariadic := strings.HasPrefix(lastParam, "...")
+
+	// Final argument: at or beyond the last param, and not variadic.
+	if fc.argIndex >= len(params)-1 && !isVariadic {
+		return ") "
+	}
+
+	return ", "
 }
 
 // isFunction checks if a name refers to a function that should display with

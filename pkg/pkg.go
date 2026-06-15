@@ -16,7 +16,7 @@ const (
 	Name = "aenv"
 	// Description is a short, human-readable summary of the project used in
 	// help output and documentation.
-	Description = "Static environment generator"
+	Description = "Composable, expression-driven environment generator"
 )
 
 // AuthorInfo represents an individual author's name and email address.

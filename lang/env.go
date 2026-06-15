@@ -9,6 +9,7 @@ package lang
 
 import (
 	"bufio"
+	"log/slog"
 	"maps"
 	"os"
 	"os/user"
@@ -16,6 +17,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/expr-lang/expr/builtin"
 
 	"github.com/ardnew/mung"
 )
@@ -34,42 +37,84 @@ var (
 // environment containing built-in variables and functions. The returned map
 // can be safely mutated by the caller without affecting the shared cache.
 func makeEnvCache() map[string]any {
+	return maps.Clone(builtinEnv())
+}
+
+// builtinEnvExtraCapacity is the number of extra map slots to allocate
+// beyond the expr-lang built-in count for aenv-specific entries.
+const builtinEnvExtraCapacity = 10
+
+// builtinEnv returns the shared immutable built-in environment.
+// Callers MUST NOT modify the returned map.
+func builtinEnv() map[string]any {
 	envCacheOnce.Do(func() {
-		envCache = map[string]any{
-			// System information (struct/string values).
-			"target":   getTarget(),
-			"platform": getPlatform(),
-			"hostname": getHostname(),
-			"user":     getUser(),
-			"shell":    getShell(),
+		envCache = make(
+			map[string]any,
+			len(builtin.Builtins)+builtinEnvExtraCapacity,
+		)
 
-			// Working directory.
-			"cwd": getCwd,
-
-			// Filesystem functions.
-			"file": map[string]any{
-				"exists":    fileExists,
-				"isDir":     fileIsDir,
-				"isRegular": fileIsRegular,
-				"isSymlink": fileIsSymlink,
-			},
-
-			// Path manipulation functions.
-			"path": map[string]any{
-				"abs": pathAbs,
-				"cat": pathCat,
-				"rel": pathRel,
-			},
-
-			// PATH-like string manipulation via mung.
-			"mung": map[string]any{
-				"prefix":   mungPrefix,
-				"prefixif": mungPrefixIf,
-			},
+		// Lower precedence: expr-lang builtins (now, len, upper, …).
+		// These are added first so aenv's own entries can overwrite them.
+		for _, f := range builtin.Builtins {
+			if fn := wrapBuiltinFunc(f); fn != nil {
+				envCache[f.Name] = fn
+			}
 		}
+
+		// Higher precedence: aenv builtins overwrite same-named entries.
+
+		// System information (struct/string values).
+		envCache["target"] = getTarget()
+		envCache["platform"] = getPlatform()
+		envCache["hostname"] = getHostname()
+		envCache["user"] = getUser()
+		envCache["shell"] = getShell()
+
+		// Filesystem functions.
+		envCache["fs"] = map[string]any{
+			"cwd":  fsCwd,
+			"abs":  fsAbs,
+			"cat":  fsCat,
+			"rel":  fsRel,
+			"stat": fsStat,
+		}
+
+		// PATH-like string manipulation via mung.
+		envCache["mung"] = mungPrefix
+		envCache["mungif"] = mungPrefixIf
 	})
 
-	return maps.Clone(envCache)
+	return envCache
+}
+
+// wrapBuiltinFunc wraps an expr-lang [builtin.Function] into a uniform
+// func(...any) (any, error) suitable for the runtime environment.
+func wrapBuiltinFunc(f *builtin.Function) func(...any) (any, error) {
+	switch {
+	case f.Func != nil:
+		return f.Func
+	case f.Safe != nil:
+		safe := f.Safe
+
+		return func(args ...any) (any, error) {
+			result, _, err := safe(args...)
+
+			return result, err
+		}
+	case f.Fast != nil:
+		fast := f.Fast
+
+		return func(args ...any) (any, error) {
+			if len(args) != 1 {
+				return nil, ErrArgumentCount.
+					With(slog.String("name", f.Name))
+			}
+
+			return fast(args[0]), nil
+		}
+	default:
+		return nil
+	}
 }
 
 // BuiltinEnvCache returns a copy of the built-in environment cache.
@@ -156,8 +201,8 @@ func BuiltinEnvLookup(path string) []string {
 // Leaving the conventions unspecified allows this type to be used
 // in a variety of contexts.
 type target struct {
-	OS   string
-	Arch string
+	OS   string `expr:"os"`
+	Arch string `expr:"arch"`
 }
 
 // getTarget returns the host target using GNU GCC/LLVM naming conventions.
@@ -267,60 +312,19 @@ func getShell() string {
 }
 
 // ---------------------------------------------------------------------------
-// Working directory
+// Path manipulation functions
 // ---------------------------------------------------------------------------
 
-func getCwd() string {
+func fsCwd() string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return pathAbs(".")
+		return fsAbs(".")
 	}
 
 	return cwd
 }
 
-// ---------------------------------------------------------------------------
-// Filesystem functions
-// ---------------------------------------------------------------------------
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-
-	return !os.IsNotExist(err)
-}
-
-func fileIsDir(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.IsDir()
-}
-
-func fileIsRegular(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.Mode().IsRegular()
-}
-
-func fileIsSymlink(path string) bool {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return false
-	}
-
-	return info.Mode()&os.ModeSymlink != 0
-}
-
-// ---------------------------------------------------------------------------
-// Path manipulation functions
-// ---------------------------------------------------------------------------
-
-func pathAbs(path string) string {
+func fsAbs(path string) string {
 	p, err := filepath.Abs(path)
 	if err != nil {
 		return path
@@ -329,41 +333,83 @@ func pathAbs(path string) string {
 	return p
 }
 
-func pathCat(elem ...string) string {
+func fsCat(elem ...string) string {
 	return filepath.Join(elem...)
 }
 
-func pathRel(from, to string) string {
-	p, err := filepath.Rel(pathAbs(from), pathAbs(to))
+func fsRel(from, to string) string {
+	p, err := filepath.Rel(fsAbs(from), fsAbs(to))
 	if err != nil {
-		return pathCat(from, to)
+		return fsCat(from, to)
 	}
 
 	return p
+}
+
+func fsStat(path string) map[string]any {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil
+	}
+
+	return map[string]any{
+		"name":  info.Name(),
+		"size":  info.Size(),
+		"mode":  info.Mode().Perm(),
+		"perms": info.Mode().String(),
+		"mtime": info.ModTime().String(),
+		"type": map[string]bool{
+			"regular":   info.Mode().IsRegular(),
+			"dir":       info.Mode()&os.ModeDir != 0,
+			"append":    info.Mode()&os.ModeAppend != 0,
+			"exclusive": info.Mode()&os.ModeExclusive != 0,
+			"temporary": info.Mode()&os.ModeTemporary != 0,
+			"symlink":   info.Mode()&os.ModeSymlink != 0,
+			"device":    info.Mode()&os.ModeDevice != 0,
+			"pipe":      info.Mode()&os.ModeNamedPipe != 0,
+			"socket":    info.Mode()&os.ModeSocket != 0,
+			"setuid":    info.Mode()&os.ModeSetuid != 0,
+			"setgid":    info.Mode()&os.ModeSetgid != 0,
+			"char":      info.Mode()&os.ModeCharDevice != 0,
+			"sticky":    info.Mode()&os.ModeSticky != 0,
+			"irregular": info.Mode()&os.ModeIrregular != 0,
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
 // PATH-like string manipulation (mung)
 // ---------------------------------------------------------------------------
 
-func mungPrefix(key string, prefix ...string) string {
+func mungPrefix(key, sep string, prefix ...string) string {
 	return mung.Make(
 		mung.WithSubjectItems(key),
-		mung.WithDelim(string(os.PathListSeparator)),
+		mung.WithDelim(sep),
 		mung.WithPrefixItems(prefix...),
 	).String()
 }
 
 func mungPrefixIf(
-	key string,
-	predicate func(string) bool,
+	key, sep string,
+	predicate func(...any) (any, error),
 	prefix ...string,
 ) string {
+	test := func(s string) bool {
+		result, err := predicate(s)
+		if err != nil {
+			return false
+		}
+
+		b, ok := result.(bool)
+
+		return ok && b
+	}
+
 	return mung.Make(
 		mung.WithSubjectItems(key),
-		mung.WithDelim(string(os.PathListSeparator)),
+		mung.WithDelim(sep),
 		mung.WithPrefixItems(prefix...),
-		mung.WithFilter(predicate),
+		mung.WithFilter(test),
 	).String()
 }
 

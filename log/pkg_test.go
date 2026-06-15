@@ -2,7 +2,9 @@ package log
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -51,6 +53,87 @@ func TestPackage_LogFunctions_UseDefaultLogger(t *testing.T) {
 			}
 			if !strings.Contains(output, `"key":"value"`) {
 				t.Errorf("expected output to contain attribute, got: %s", output)
+			}
+		})
+	}
+}
+
+func TestPackage_Callsite_ContextFunctions_ReportCaller(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	ctx := context.Background()
+
+	original := defaultLog
+	defer func() { defaultLog = original }()
+
+	tests := []struct {
+		name string
+		fn   func(context.Context, string, ...slog.Attr)
+	}{
+		{"TraceContext", TraceContext},
+		{"DebugContext", DebugContext},
+		{"InfoContext", InfoContext},
+		{"WarnContext", WarnContext},
+		{"ErrorContext", ErrorContext},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			defaultLog = Make(&buf,
+				WithLevel(LevelTrace),
+				WithCallsite(true),
+				WithFormat(FormatJSON),
+				WithPretty(false),
+			)
+
+			tt.fn(ctx, "caller test")
+			src := parseSource(t, buf.String())
+
+			if src.File != thisFile {
+				t.Errorf("expected source file %q, got %q", thisFile, src.File)
+			}
+			if src.Function == "" {
+				t.Error("expected non-empty source function")
+			}
+		})
+	}
+}
+
+func TestPackage_Callsite_NonContextFunctions_ReportCaller(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+
+	original := defaultLog
+	defer func() { defaultLog = original }()
+
+	tests := []struct {
+		name string
+		fn   func(string, ...slog.Attr)
+	}{
+		{"Trace", Trace},
+		{"Debug", Debug},
+		{"Info", Info},
+		{"Warn", Warn},
+		{"Error", Error},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			defaultLog = Make(&buf,
+				WithLevel(LevelTrace),
+				WithCallsite(true),
+				WithFormat(FormatJSON),
+				WithPretty(false),
+			)
+
+			tt.fn("caller test")
+			src := parseSource(t, buf.String())
+
+			if src.File != thisFile {
+				t.Errorf("expected source file %q, got %q", thisFile, src.File)
+			}
+			if src.Function == "" {
+				t.Error("expected non-empty source function")
 			}
 		})
 	}

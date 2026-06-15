@@ -10,10 +10,12 @@ import (
 
 // AST is the root of the abstract syntax tree.
 type AST struct {
-	Namespaces []*Namespace
-	index      map[string]*Namespace // O(1) namespace lookup index
-	opts       options
-	logger     log.Logger
+	Namespaces  []*Namespace
+	index       map[string]*Namespace // O(1) namespace lookup index
+	merged      []*Namespace          // cached mergeEntries result
+	mergedValid bool                  // true when merged is up-to-date
+	opts        options
+	logger      log.Logger
 }
 
 // options holds AST-wide configuration.
@@ -139,6 +141,31 @@ func (a *AST) All() iter.Seq[*Namespace] {
 	}
 }
 
+// RemoveNamespace removes all namespaces with the given name from the AST.
+// It returns true if at least one namespace was removed.
+func (a *AST) RemoveNamespace(name string) bool {
+	filtered := a.Namespaces[:0]
+
+	for _, ns := range a.Namespaces {
+		if ns.Name != name {
+			filtered = append(filtered, ns)
+		}
+	}
+
+	removed := len(filtered) != len(a.Namespaces)
+	a.Namespaces = filtered
+
+	if removed {
+		a.mergedValid = false
+
+		if a.index != nil {
+			delete(a.index, name)
+		}
+	}
+
+	return removed
+}
+
 // DefineNamespace adds or replaces a namespace in the AST.
 func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 	ns := &Namespace{
@@ -157,6 +184,8 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 				a.index[name] = ns
 			}
 
+			a.mergedValid = false
+
 			return
 		}
 	}
@@ -167,6 +196,19 @@ func (a *AST) DefineNamespace(name string, params []Param, value *Value) {
 	if a.index != nil {
 		a.index[name] = ns
 	}
+
+	a.mergedValid = false
+}
+
+// mergedNamespaces returns the deduplicated/merged top-level namespaces,
+// computing and caching the result on first call or after invalidation.
+func (a *AST) mergedNamespaces() []*Namespace {
+	if !a.mergedValid {
+		a.merged = mergeEntries(a.Namespaces)
+		a.mergedValid = true
+	}
+
+	return a.merged
 }
 
 // buildIndex creates the namespace lookup index for O(1) access.
@@ -180,4 +222,60 @@ func (a *AST) buildIndex() {
 	for _, ns := range a.Namespaces {
 		a.index[ns.Name] = ns
 	}
+}
+
+// mergeEntries takes a list of namespace entries that may contain duplicate
+// names and returns a deduplicated list. The order of first occurrence is
+// preserved. When two entries share a name:
+//   - If both have block values, their entries are merged recursively.
+//   - Otherwise the later definition replaces the earlier one entirely.
+func mergeEntries(entries []*Namespace) []*Namespace {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	entryMap := make(map[string]*Namespace, len(entries))
+	order := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		existing, seen := entryMap[entry.Name]
+		if !seen {
+			entryMap[entry.Name] = entry
+			order = append(order, entry.Name)
+
+			continue
+		}
+
+		// Both blocks: merge entries recursively.
+		if existing.Value != nil && existing.Value.Kind == KindBlock &&
+			entry.Value != nil && entry.Value.Kind == KindBlock {
+			combined := make([]*Namespace, 0,
+				len(existing.Value.Entries)+len(entry.Value.Entries))
+			combined = append(combined, existing.Value.Entries...)
+			combined = append(combined, entry.Value.Entries...)
+
+			entryMap[entry.Name] = &Namespace{
+				Name:   entry.Name,
+				Params: entry.Params,
+				Value: &Value{
+					Kind:    KindBlock,
+					Entries: mergeEntries(combined),
+					Pos:     entry.Value.Pos,
+				},
+				Pos: entry.Pos,
+			}
+
+			continue
+		}
+
+		// Non-block or mixed: last definition wins.
+		entryMap[entry.Name] = entry
+	}
+
+	result := make([]*Namespace, 0, len(order))
+	for _, name := range order {
+		result = append(result, entryMap[name])
+	}
+
+	return result
 }

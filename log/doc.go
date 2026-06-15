@@ -8,8 +8,8 @@
 // # Basic Usage
 //
 //	logger := log.Make(os.Stdout)
-//	logger.Info("application started", "version", "1.0.0")
-//	logger.Error("failed to connect", "error", err)
+//	logger.Info("application started", slog.String("version", "1.0.0"))
+//	logger.Error("failed to connect", slog.String("error", err.Error()))
 //
 // # Configuration
 //
@@ -17,15 +17,18 @@
 //
 //	logger := log.Make(os.Stdout,
 //		log.WithLevel(log.LevelDebug),
-//		log.WithTimeFormat("RFC3339Nano"),
-//		log.WithCaller(true))
+//		log.WithTimeLayout("RFC3339Nano"),
+//		log.WithCallsite(true))
 //
 // # Adding Attributes
 //
 // Attributes can be added to the logger to be included in all subsequent
 // log messages using the [Logger.With] method:
 //
-//	logger = logger.With("component", "api", "request_id", "123")
+//	logger = logger.With(slog.String("component", "api"),
+//
+// slog.String("request_id", "123"))
+//
 //	logger.Info("request received") // includes component=api request_id=123
 //
 // # Context-Aware Logging
@@ -42,7 +45,8 @@
 //
 // # Supported Levels
 //
-// The package supports four log levels: [LevelDebug], [LevelInfo],
+// The package supports five log levels: [LevelTrace], [LevelDebug],
+// [LevelInfo],
 // [LevelWarn], and [LevelError]. Messages below the configured level
 // are discarded.
 //

@@ -1,11 +1,14 @@
 package repl
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
+
+	"github.com/ardnew/aenv/lang"
 )
 
 // makeMatches builds a fuzzy.Matches slice from a plain string slice with no
@@ -164,5 +167,99 @@ func TestParentPath_WithOperators(t *testing.T) {
 					tt.input, tt.wordStart, got, tt.want)
 			}
 		})
+	}
+}
+
+// testAST builds a small AST for tab-finish tests. It defines:
+//
+//	greeting : "hello"         (non-parameterised)
+//	add x y : x + y           (parameterised, 2 fixed params)
+//	concat ...parts : parts   (parameterised, variadic)
+func testAST(t *testing.T) *lang.AST {
+	t.Helper()
+
+	const src = `greeting : "hello"; add x y : x + y; concat ...parts : parts[0]`
+
+	ast, err := lang.ParseString(context.Background(), src)
+	if err != nil {
+		t.Fatalf("parse test AST: %v", err)
+	}
+
+	return ast
+}
+
+func TestTabFinishSuffix_OutsideCall(t *testing.T) {
+	ast := testAST(t)
+
+	tests := []struct {
+		name string
+		word string
+		want string
+	}{
+		{"non_callable", "greeting", " "},
+		{"callable_fixed", "add", "("},
+		{"callable_variadic", "concat", "("},
+		{"expr_builtin_len", "len", "("},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate cursor at end of standalone word.
+			input := tt.word
+			cursor := len(input)
+
+			got := tabFinishSuffix(ast, input, cursor, tt.word)
+			if got != tt.want {
+				t.Errorf("tabFinishSuffix(%q) = %q, want %q", tt.word, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTabFinishSuffix_InsideCall_NonFinal(t *testing.T) {
+	ast := testAST(t)
+
+	// Cursor inside add( at arg 0 — not the final arg.
+	input := "add(greeting"
+	cursor := len(input)
+
+	got := tabFinishSuffix(ast, input, cursor, "greeting")
+	if got != ", " {
+		t.Errorf("tabFinishSuffix non-final arg = %q, want %q", got, ", ")
+	}
+}
+
+func TestTabFinishSuffix_InsideCall_FinalArg(t *testing.T) {
+	ast := testAST(t)
+
+	// Cursor inside add( at arg 1 — the final arg (non-variadic).
+	input := "add(1, greeting"
+	cursor := len(input)
+
+	got := tabFinishSuffix(ast, input, cursor, "greeting")
+	if got != ") " {
+		t.Errorf("tabFinishSuffix final arg = %q, want %q", got, ") ")
+	}
+}
+
+func TestTabFinishSuffix_InsideCall_VariadicArg(t *testing.T) {
+	ast := testAST(t)
+
+	// Cursor inside concat( at arg 0 — variadic, always ", ".
+	input := "concat(greeting"
+	cursor := len(input)
+
+	got := tabFinishSuffix(ast, input, cursor, "greeting")
+	if got != ", " {
+		t.Errorf("tabFinishSuffix variadic arg 0 = %q, want %q", got, ", ")
+	}
+
+	// Also at arg 1 (beyond declared params but still variadic).
+	input2 := "concat(1, greeting"
+	cursor2 := len(input2)
+
+	got2 := tabFinishSuffix(ast, input2, cursor2, "greeting")
+	if got2 != ", " {
+		t.Errorf("tabFinishSuffix variadic arg 1 = %q, want %q", got2, ", ")
 	}
 }

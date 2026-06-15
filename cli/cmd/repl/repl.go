@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,10 +19,14 @@ import (
 
 	"github.com/ardnew/aenv/lang"
 	"github.com/ardnew/aenv/log"
+	"github.com/ardnew/aenv/pkg"
 )
 
 // editASTMsg is sent when AST editing completes successfully.
-type editASTMsg struct{ ast *lang.AST }
+type editASTMsg struct {
+	ast       *lang.AST
+	unchanged bool
+}
 
 // editCancelledMsg is sent when the user cleared the editor content.
 type editCancelledMsg struct{}
@@ -38,28 +43,272 @@ const (
 	ctrlPrompt = " :"
 )
 
-func helpMessage() string {
-	return `
-: Commands (press Esc to toggle mode):
+// helpTopic defines a single help topic with its short summary and detailed
+// content.
+type helpTopic struct {
+	name    string      // topic identifier (used in :help <topic>)
+	summary string      // one-line summary shown in :help overview
+	detail  helpDetails // detailed help text shown by :help <topic>
+}
 
-  help     Print this cruft
-  list     List top-level namespaces
-  edit     Edit source in external $EDITOR
-  clear    Clear screen
-  quit     Exit REPL
+type helpDetails struct {
+	pretty  bool
+	title   string
+	content []struct{ key, value []string }
+}
 
-Usage:
-  Type an expression to evaluate it (namespaces are variables)
-  Completions appear automatically as you type
-  Press Tab / Shift-Tab to cycle through candidates
-  Press Space to accept the current candidate
-  Press Esc to toggle between eval and command modes
-  Use Up/Down arrows for history navigation (mode switches automatically)
-  Use Shift+Up/Shift+Down for history navigation within current mode only
-  Use Alt+Up/Alt+Down to switch to command mode and navigate command history
-    (restores original mode when reaching end of history)
-  Press Ctrl+C on empty line or Ctrl+D to exit
-`
+type slicePairs[T any] [][2][]T
+
+func makeHelpDetails(title string, pairs slicePairs[string]) helpDetails {
+	content := make([]struct{ key, value []string }, len(pairs))
+	for i, p := range pairs {
+		content[i] = struct{ key, value []string }{key: p[0], value: p[1]}
+	}
+
+	return helpDetails{
+		title:   title,
+		content: content,
+	}
+}
+
+func (h helpDetails) String() string {
+	var b, l, r strings.Builder
+	fmt.Fprintf(&b, " %s\n\n", h.title)
+
+	maxL := 0
+
+	for _, item := range h.content {
+		r.WriteString(strings.Join(item.value, "\n") + "\n")
+		key := strings.Join(item.key, " ")
+		l.WriteString(key + strings.Repeat("\n", len(item.value)))
+		maxL = max(maxL, strings.IndexRune(key, '\n'))
+	}
+
+	keyStyle := lipgloss.NewStyle().Bold(h.pretty).Margin(0, 3, 0, 4)
+
+	b.WriteString(
+		lipgloss.JoinHorizontal(0, keyStyle.Render(l.String()), r.String()),
+	)
+
+	return b.String()
+}
+
+// helpTopics defines the available help topics in display order.
+var helpTopics = []helpTopic{
+	{
+		name:    "keys",
+		summary: "Keyboard shortcuts and keybindings",
+		detail: makeHelpDetails(
+			"Keybindings:",
+			slicePairs[string]{
+				{{"Esc"}, {"Toggle evaluation or command mode"}},
+				{{"Tab"}, {"Cycle completions forward"}},
+				{{"Shift+Tab"}, {"Cycle completions backward"}},
+				{{"↑ / ↓"}, {"Navigate all history", " (mode follows entry)"}},
+				{{"Shift+↑/↓"}, {"Navigate history within current mode only"}},
+				{
+					{"Alt+↑/↓"},
+					{
+						"Navigate command history",
+						" (automatically restores previous mode)",
+					},
+				},
+				{{"Ctrl+L"}, {"Clear screen"}},
+				{{"Ctrl+C"}, {"Clear input", " (quit if input is empty)"}},
+				{{"Ctrl+D"}, {"Quit", " (discards input and signals EOF)"}},
+			},
+		),
+	},
+	{
+		name:    "commands",
+		summary: "Available REPL commands",
+		detail: makeHelpDetails(
+			"Commands  (switch to command mode with Esc, or type : alone in eval mode):",
+			slicePairs[string]{
+				{{"help"}, {"Show help overview and available topics"}},
+				{{"help", "<topic>"}, {"Show detailed help for a specific topic"}},
+				{{"list"}, {"List all top-level namespaces"}},
+				{
+					{"edit"},
+					{
+						"Open all sources combined in $EDITOR",
+						" (recompiles and reloads on save,",
+						"  or resumes editing on parse error)",
+					},
+				},
+				{{"clear"}, {"Clear the screen"}},
+				{{"quit"}, {"Exit the REPL"}},
+			},
+		),
+	},
+	{
+		name:    "eval",
+		summary: "Expression evaluation and syntax",
+		detail: makeHelpDetails(
+			"Evaluation:",
+			slicePairs[string]{
+				{{"Syntax"}, {""}},
+				{{"name : expr"}, {"Define a namespace with an expression value"}},
+				{{"name : { ... }"}, {"Define a block (entries separated by ;)"}},
+				{{"fn a b : expr"}, {"Parameterized namespace (callable as fn(a, b))"}},
+				{{"fn ...xs : expr"}, {"Variadic parameter (collects remaining args)"}},
+				{{"# or //"}, {"Line comment"}},
+				{{"/* ... */"}, {"Block comment"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Values"}, {""}},
+				{
+					{"42, 3.14, 0xff"},
+					{"Number literals (int, float, hex, octal, binary)"},
+				},
+				{{"\"s\", 's', `s`"}, {"String literals (double, single, backtick)"}},
+				{{"true, false, nil"}, {"Boolean and nil literals"}},
+				{{"[1, 2, 3]"}, {"Array literal"}},
+				{{`{"k": "v"}`}, {"Map literal"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Operators"}, {""}},
+				{{"+ - * / %"}, {"Arithmetic"}},
+				{{"== != < <= > >="}, {"Comparison"}},
+				{{"and or not (&&, ||, !)"}, {"Logical"}},
+				{{"x ? y : z"}, {"Ternary conditional"}},
+				{{"v in arr"}, {"Membership test"}},
+				{{"a[0], a[1:3]"}, {"Indexing and slicing"}},
+				{{"m.key, m[\"key\"]"}, {"Member access"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Builtins"}, {""}},
+				{
+					{"target.os, target.arch"},
+					{"Host target (GNU naming: x86_64, aarch64)"},
+				},
+				{
+					{"platform.os, platform.arch"},
+					{"Host platform (Go naming: amd64, arm64)"},
+				},
+				{{"hostname"}, {"System hostname"}},
+				{
+					{"user.username, user.homeDir"},
+					{"Current user info (.name, .uid, .gid)"},
+				},
+				{{"shell"}, {"Current shell path"}},
+				{{"env.HOME, env[\"PATH\"]"}, {"Process environment variables"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Filesystem"}, {""}},
+				{{"fs.cwd()"}, {"Current working directory"}},
+				{{"fs.abs(path)"}, {"Absolute path"}},
+				{{"fs.cat(p1, p2, ...)"}, {"Join path segments"}},
+				{{"fs.rel(from, to)"}, {"Relative path"}},
+				{{"fs.stat(path)"}, {"File info (.name, .size, .mode, .perms, .type)"}},
+				{
+					{""},
+					{""},
+				},
+				{{"PATH Helpers"}, {""}},
+				{{"mung(key, sep, ...pfx)"}, {"Prepend to a path-like variable"}},
+				{{"mungif(key, sep, pred, ...pfx)"}, {"Conditional prepend"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Common Functions"}, {""}},
+				{{"len, string, int, float"}, {"Length, type conversion"}},
+				{{"upper, lower, trim"}, {"String case and whitespace"}},
+				{{"split, join, replace"}, {"String manipulation"}},
+				{{"contains, startsWith, endsWith"}, {"String predicates"}},
+				{{"sort, reverse, unique, flatten"}, {"Array operations"}},
+				{{"map, filter, count, sum"}, {"Array higher-order functions"}},
+				{{"min, max, abs, ceil, floor"}, {"Math functions"}},
+				{{"keys, values"}, {"Map introspection"}},
+				{{"toJSON, fromJSON"}, {"JSON conversion"}},
+				{{"sprintf(fmt, args...)"}, {"Formatted string output"}},
+				{
+					{""},
+					{""},
+				},
+				{{"Scoping"}, {""}},
+				{{"(inner → outer)"}, {"Params > block locals > top-level > builtins"}},
+				{{"block entries"}, {"Forward references not allowed within blocks"}},
+				{{"duplicate names"}, {"Blocks merge, expressions: last wins"}},
+			},
+		),
+	},
+	{
+		name:    "modes",
+		summary: "Evaluation and command modes",
+		detail: makeHelpDetails(
+			"Modes:",
+			slicePairs[string]{
+				{{"➜ eval"}, {"Evaluate expressios"}},
+				{{" :command"}, {"Command and control the REPL"}},
+			},
+		),
+	},
+}
+
+// helpTopicNames returns the sorted list of topic names for completion.
+func helpTopicNames() []string {
+	names := make([]string, len(helpTopics))
+	for i, t := range helpTopics {
+		names[i] = t.name
+	}
+
+	return names
+}
+
+// helpOverview returns the top-level help output listing available topics.
+func helpOverview() string {
+	var b strings.Builder
+
+	b.WriteString(
+		"\nAvailable topics  (type :help <topic> for details):\n\n",
+	)
+
+	// Find max topic name length for alignment.
+	maxLen := 0
+	for _, t := range helpTopics {
+		if len(t.name) > maxLen {
+			maxLen = len(t.name)
+		}
+	}
+
+	for _, t := range helpTopics {
+		pad := strings.Repeat(" ", maxLen-len(t.name)+2)
+		fmt.Fprintf(&b, "  %s%s%s\n", t.name, pad, t.summary)
+	}
+
+	return b.String()
+}
+
+// helpDetail returns the detailed text for a specific topic, or an error
+// message if the topic is not found.
+func helpDetail(topic string) string {
+	topic = strings.ToLower(strings.TrimSpace(topic))
+
+	for _, t := range helpTopics {
+		if t.name == topic {
+			return "\n" + t.detail.String()
+		}
+	}
+
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "Unknown help topic: %s\n\nAvailable topics:\n", topic)
+
+	for _, t := range helpTopics {
+		fmt.Fprintf(&b, "  %s\n", t.name)
+	}
+
+	return b.String()
 }
 
 // inputMode represents the current input mode.
@@ -120,6 +369,7 @@ type model struct {
 	altNavOrigText   string        // original text before Alt navigation
 	altNavOrigCursor int           // original cursor position before Alt navigation
 	width            int           // terminal width for ellipsization
+	editing          bool
 	quitting         bool
 	mode             inputMode
 	evalText         string
@@ -178,7 +428,9 @@ func Run(
 
 	history := NewHistory(filepath.Join(cacheDir, baseHistory))
 	if err := history.Load(); err != nil {
-		fmt.Printf("Warning: could not load history: %v\n", err)
+		logger.WarnContext(ctx, "could not load history",
+			slog.String("error", err.Error()),
+		)
 	}
 
 	logger.TraceContext(
@@ -222,7 +474,11 @@ func newModel(
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	banner := resultStyle.Render(
+		fmt.Sprintf("%s version %s", pkg.Name, strings.TrimSpace(pkg.Version)),
+	)
+
+	return tea.Batch(textinput.Blink, tea.Println(banner))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -237,6 +493,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editASTMsg:
+		m.editing = false
+
+		if msg.unchanged {
+			m.logger.TraceContext(
+				m.ctxFunc(),
+				"repl edit unchanged",
+			)
+
+			return m, tea.Println(hintStyle.Render("✔ — AST unmodified"))
+		}
+
 		m.ast = msg.ast
 		// Clear program cache since AST changed
 		lang.ClearProgramCache()
@@ -249,16 +516,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Println(resultStyle.Render("✔ — AST updated successfully"))
 
 	case editCancelledMsg:
-		return m, tea.Println(hintStyle.Render("🗴 — edit cancelled."))
+		m.editing = false
+
+		return m, tea.Println(hintStyle.Render("✘ — edit cancelled."))
 
 	case editDeclinedMsg:
-		m.quitting = true
+		m.editing = false
 
-		return m, tea.Quit
+		return m, tea.Println(hintStyle.Render("edit declined, returning to REPL"))
 
 	case editErrorMsg:
+		m.editing = false
+
 		return m, tea.Println(
-			errorStyle.Render("🗴 — error: " + msg.err.Error()),
+			errorStyle.Render("✘ — error: " + msg.err.Error()),
 		)
 	}
 
@@ -270,7 +541,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	if m.quitting {
+	if m.quitting || m.editing {
 		return ""
 	}
 
@@ -303,28 +574,45 @@ func (m model) View() string {
 
 	case strings.TrimSpace(input) == "":
 		// Empty or whitespace-only input: show hint.
+		escKey := suggestionStyle.Render(`Esc`)
+
 		var hint string
 		if m.mode == modeEval {
-			hint = "Type an expression or press Esc for commands"
+			hint = fmt.Sprintf(
+				"Enter an expression to evaluate  •  %s toggle command mode",
+				escKey,
+			)
 		} else {
-			hint = "Type: help, list, edit, clear, quit (press Esc to return)"
+			hint = strings.Join(ctrlCommands, "  ") +
+				fmt.Sprintf("  •  %s return to eval mode", escKey)
 		}
 
 		b.WriteString(hintStyle.Render(hint))
 		b.WriteString("\n")
 
 	case funcCall.inCall && m.mode == modeEval:
-		// Show function signature hint with current parameter highlighted
-		signature, params := getSignature(m.ast, funcCall.name)
-		if signature != "" {
-			hint := renderSignatureHint(signature, params, funcCall.argIndex)
-			b.WriteString(hint)
+		// When the user has typed a partial word (or is Tab-cycling through
+		// candidates), show the completion bar instead of the signature hint.
+		// The signature is shown only when the word at the cursor is empty and
+		// the user is not actively browsing completions.
+		word, _, _ := wordBounds(input, cursor)
+		showCandidates := len(m.matches) > 0 && (word != "" || m.tabActive)
+
+		if showCandidates {
+			bar := renderCandidateBar(
+				m.matches, m.suggIdx, m.tabActive, m.width, true,
+			)
+			b.WriteString(bar)
 			b.WriteString("\n")
 		} else {
-			// Function not found, show completion bar if available
-			if len(m.matches) > 0 {
+			signature, params := getSignature(m.ast, funcCall.name)
+			if signature != "" {
+				hint := renderSignatureHint(signature, params, funcCall.argIndex)
+				b.WriteString(hint)
+				b.WriteString("\n")
+			} else if len(m.matches) > 0 {
 				bar := renderCandidateBar(
-					m.matches, m.suggIdx, m.tabActive, m.width,
+					m.matches, m.suggIdx, m.tabActive, m.width, true,
 				)
 				b.WriteString(bar)
 				b.WriteString("\n")
@@ -337,6 +625,7 @@ func (m model) View() string {
 		// Render horizontal candidate bar.
 		bar := renderCandidateBar(
 			m.matches, m.suggIdx, m.tabActive, m.width,
+			m.mode == modeEval,
 		)
 		b.WriteString(bar)
 		b.WriteString("\n")
@@ -358,6 +647,11 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	)
 
 	switch msg.Type {
+	case tea.KeyCtrlL:
+		m, _ = m.switchToMode(modeEval)
+
+		return m, tea.ClearScreen
+
 	case tea.KeyCtrlC:
 		if m.input.Value() == "" {
 			m.quitting = true
@@ -374,13 +668,9 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyCtrlD:
-		if m.input.Value() == "" {
-			m.quitting = true
+		m.quitting = true
 
-			return m, tea.Quit
-		}
-
-		return m, nil
+		return m, tea.Quit
 
 	case tea.KeyEnter:
 		if !m.tabActive || len(m.matches) == 0 {
@@ -420,6 +710,12 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 
 	case tea.KeyShiftDown:
 		return m.historyNextInMode()
+
+	case tea.KeyBackspace:
+		// Backspace at column 0 in command mode returns to eval mode.
+		if m.mode == modeCtrl && m.input.Position() == 0 {
+			return m.switchToMode(modeEval)
+		}
 
 	case tea.KeyEsc:
 		if m.tabActive {
@@ -480,6 +776,27 @@ func (m model) handleKey(msg tea.KeyMsg) (model, tea.Cmd) {
 }
 
 func (m model) handleTab() (model, tea.Cmd) {
+	// Tab-finish: when not cycling and the typed word at the cursor is
+	// already an exact candidate, insert a contextual separator instead
+	// of starting to cycle through candidates.
+	if !m.tabActive {
+		if suffix, ok := m.tryTabFinish(); ok {
+			input := m.input.Value()
+			cursor := m.input.Position()
+			newInput := input[:cursor] + suffix + input[cursor:]
+			newCursor := cursor + len(suffix)
+
+			m.input.SetValue(newInput)
+			m.input.SetCursor(newCursor)
+			m.tabActive = false
+			m.suggIdx = -1
+			m.matches = nil
+			refreshMatches(&m, false)
+
+			return m, nil
+		}
+	}
+
 	if len(m.matches) == 0 {
 		// When input is empty at the top level in eval mode, populate all
 		// candidates sorted by priority so the user can browse everything.
@@ -576,11 +893,24 @@ func populateAllMatches(m *model) bool {
 	m.candidates = cands
 	m.matches = all
 
-	// Reset word boundaries to reflect the current (likely empty) input so
-	// that replaceCurrentWord does not use stale offsets from a previous
-	// evaluation.
-	m.wordStart = 0
-	m.wordEnd = len(m.input.Value())
+	// Reset word boundaries to reflect the current word at the cursor so
+	// that replaceCurrentWord only replaces the word under the cursor, not
+	// the entire input. This is critical when Tab is pressed inside a
+	// function argument list (e.g., "filter(keys(|), foo)").
+	_, ws, we := wordBounds(m.input.Value(), m.input.Position())
+	m.wordStart = ws
+	m.wordEnd = we
+
+	// Apply type-based filtering when inside a function call.
+	fc := detectFunctionCall(m.input.Value(), m.input.Position())
+	if fc.inCall {
+		all = filterByParamType(all, m.ast, fc)
+		if len(all) == 0 {
+			return false
+		}
+
+		m.matches = all
+	}
 
 	return true
 }
@@ -606,6 +936,16 @@ func replaceCurrentWord(m *model, replacement string) {
 // the user can freely edit without unexpected completions.
 func refreshMatches(m *model, autoConfirm bool) {
 	m.matches, m.candidates, m.wordStart, m.wordEnd = m.computeMatches()
+
+	// Apply type-based filtering when inside a function call so that
+	// candidates are narrowed to those compatible with the expected
+	// parameter type (e.g., only callables for predicate arguments).
+	if m.mode == modeEval {
+		fc := detectFunctionCall(m.input.Value(), m.input.Position())
+		if fc.inCall {
+			m.matches = filterByParamType(m.matches, m.ast, fc)
+		}
+	}
 
 	if !m.tabActive {
 		m.suggIdx = -1
@@ -731,7 +1071,14 @@ func (m model) executeCommand(
 	case "h", "help":
 		m, _ = m.switchToMode(modeEval)
 
-		return m, tea.Sequence(echoCmd, tea.Println(m.helpView()))
+		var helpText string
+		if len(args) > 0 {
+			helpText = m.helpView(args[0])
+		} else {
+			helpText = m.helpView("")
+		}
+
+		return m, tea.Sequence(echoCmd, tea.Println(helpText))
 
 	case "l", "list":
 		m, _ = m.switchToMode(modeEval)
@@ -741,30 +1088,33 @@ func (m model) executeCommand(
 	case "c", "clear":
 		m, _ = m.switchToMode(modeEval)
 
-		return m, tea.ClearScreen
+		return m, tea.Sequence(echoCmd, tea.ClearScreen)
 
 	case "e", "edit":
 		m, _ = m.switchToMode(modeEval)
+		m.editing = true
 
 		var editCmd tea.Cmd
 
-		m, editCmd = m.handleEdit(m.ctxFunc())
+		m, editCmd = m.handleEdit(m.ctxFunc(), formatCtrlCommand(input))
 
-		return m, tea.Sequence(echoCmd, editCmd)
+		return m, editCmd
 
 	default:
 		// Unknown command — stay in command mode so the user can retry.
-		return m, tea.Println(
-			errorStyle.Render("Unknown command: " + cmd + " (try 'help')"),
+		return m, tea.Sequence(
+			echoCmd,
+			tea.Println(errorStyle.Render("Unknown command: "+cmd+" (try 'help')")),
 		)
 	}
 }
 
-func (m model) handleEdit(_ context.Context) (model, tea.Cmd) {
+func (m model) handleEdit(_ context.Context, echo string) (model, tea.Cmd) {
 	cmd := &editASTCommand{
 		ast:     m.ast,
 		ctxFunc: m.ctxFunc,
 		logger:  m.logger,
+		echo:    echo,
 	}
 
 	return m, tea.Exec(cmd, func(err error) tea.Msg {
@@ -780,7 +1130,7 @@ func (m model) handleEdit(_ context.Context) (model, tea.Cmd) {
 			return editCancelledMsg{}
 		}
 
-		return editASTMsg{ast: cmd.newAST}
+		return editASTMsg{ast: cmd.newAST, unchanged: cmd.unchanged}
 	})
 }
 
@@ -957,15 +1307,49 @@ func (m model) historyNextCtrl() (model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) helpView() string { return helpMessage() }
+// helpView returns the help text. When topic is empty, the overview is
+// returned; otherwise the detailed text for the given topic is returned.
+func (m model) helpView(topic string) string {
+	if topic == "" {
+		return helpOverview()
+	}
+
+	return helpDetail(topic)
+}
 
 func (m model) listNamespaces() string {
 	var b strings.Builder
 
+	// Collect namespaces and sort alphabetically.
+	type entry struct {
+		name    string
+		preview string
+	}
+
+	entries := make([]entry, 0, len(m.ast.Namespaces))
+
 	for ns := range m.ast.All() {
-		name := ns.Name
-		preview := formatPreview(ns)
-		b.WriteString(fmt.Sprintf("  %s %s\n", name, hintStyle.Render(preview)))
+		entries = append(entries, entry{
+			name:    ns.Name,
+			preview: formatPreview(ns),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].name < entries[j].name
+	})
+
+	// Find max name length for alignment.
+	maxLen := 0
+	for _, e := range entries {
+		if len(e.name) > maxLen {
+			maxLen = len(e.name)
+		}
+	}
+
+	for _, e := range entries {
+		pad := strings.Repeat(" ", maxLen-len(e.name)+2)
+		fmt.Fprintf(&b, "  %s%s%s\n", e.name, pad, hintStyle.Render(e.preview))
 	}
 
 	return b.String()

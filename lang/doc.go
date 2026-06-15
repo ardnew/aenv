@@ -5,7 +5,7 @@
 //
 // # Philosophy
 //
-// Every value in lang2 is an expr-lang expression. The grammar has only two
+// Every value in lang is an expr-lang expression. The grammar has only two
 // value kinds:
 //
 //   - Expression: raw text passed to expr-lang (e.g., 42, "hello", x + 1)

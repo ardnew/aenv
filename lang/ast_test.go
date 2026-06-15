@@ -219,6 +219,184 @@ func BenchmarkGetNamespace(b *testing.B) {
 	}
 }
 
+func TestMergeEntries_ExprLastWins(t *testing.T) {
+	entries := []*Namespace{
+		{Name: "x", Value: NewExpr("1")},
+		{Name: "x", Value: NewExpr("2")},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(merged))
+	}
+
+	if merged[0].Value.Source != "2" {
+		t.Errorf("expected source %q, got %q", "2", merged[0].Value.Source)
+	}
+}
+
+func TestMergeEntries_BlockMerge(t *testing.T) {
+	entries := []*Namespace{
+		{
+			Name: "config",
+			Value: NewBlock(
+				NewNamespace("a", nil, NewExpr("1")),
+				NewNamespace("b", nil, NewExpr("2")),
+			),
+		},
+		{
+			Name: "config",
+			Value: NewBlock(
+				NewNamespace("a", nil, NewExpr("3")),
+			),
+		},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(merged))
+	}
+
+	block := merged[0].Value
+	if block.Kind != KindBlock {
+		t.Fatalf("expected block, got %v", block.Kind)
+	}
+
+	if len(block.Entries) != 2 {
+		t.Fatalf("expected 2 block entries, got %d", len(block.Entries))
+	}
+
+	// "a" should be shadowed (value "3")
+	if block.Entries[0].Name != "a" || block.Entries[0].Value.Source != "3" {
+		t.Errorf("expected a=3, got %s=%s",
+			block.Entries[0].Name, block.Entries[0].Value.Source)
+	}
+
+	// "b" should be preserved (value "2")
+	if block.Entries[1].Name != "b" || block.Entries[1].Value.Source != "2" {
+		t.Errorf("expected b=2, got %s=%s",
+			block.Entries[1].Name, block.Entries[1].Value.Source)
+	}
+}
+
+func TestMergeEntries_RecursiveBlockMerge(t *testing.T) {
+	entries := []*Namespace{
+		{
+			Name: "outer",
+			Value: NewBlock(
+				NewNamespace("inner", nil, NewBlock(
+					NewNamespace("x", nil, NewExpr("1")),
+					NewNamespace("y", nil, NewExpr("2")),
+				)),
+			),
+		},
+		{
+			Name: "outer",
+			Value: NewBlock(
+				NewNamespace("inner", nil, NewBlock(
+					NewNamespace("x", nil, NewExpr("3")),
+				)),
+			),
+		},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(merged))
+	}
+
+	inner := merged[0].Value.Entries[0]
+	if inner.Name != "inner" {
+		t.Fatalf("expected inner, got %s", inner.Name)
+	}
+
+	if len(inner.Value.Entries) != 2 {
+		t.Fatalf("expected 2 inner entries, got %d", len(inner.Value.Entries))
+	}
+
+	// x should be shadowed
+	if inner.Value.Entries[0].Value.Source != "3" {
+		t.Errorf("expected x=3, got %s", inner.Value.Entries[0].Value.Source)
+	}
+
+	// y should be preserved
+	if inner.Value.Entries[1].Value.Source != "2" {
+		t.Errorf("expected y=2, got %s", inner.Value.Entries[1].Value.Source)
+	}
+}
+
+func TestMergeEntries_MixedBlockExprLastWins(t *testing.T) {
+	entries := []*Namespace{
+		{
+			Name:  "x",
+			Value: NewBlock(NewNamespace("a", nil, NewExpr("1"))),
+		},
+		{
+			Name:  "x",
+			Value: NewExpr("42"),
+		},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(merged))
+	}
+
+	if merged[0].Value.Kind != KindExpr {
+		t.Errorf("expected KindExpr, got %v", merged[0].Value.Kind)
+	}
+
+	if merged[0].Value.Source != "42" {
+		t.Errorf("expected source %q, got %q", "42", merged[0].Value.Source)
+	}
+}
+
+func TestMergeEntries_PreservesOrder(t *testing.T) {
+	entries := []*Namespace{
+		{Name: "c", Value: NewExpr("3")},
+		{Name: "a", Value: NewExpr("1")},
+		{Name: "b", Value: NewExpr("2")},
+		{Name: "a", Value: NewExpr("10")},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(merged))
+	}
+
+	// Order should follow first occurrence: c, a, b
+	expected := []string{"c", "a", "b"}
+	for i, name := range expected {
+		if merged[i].Name != name {
+			t.Errorf("position %d: expected %s, got %s", i, name, merged[i].Name)
+		}
+	}
+
+	// "a" should have the last value
+	if merged[1].Value.Source != "10" {
+		t.Errorf("expected a=10, got %s", merged[1].Value.Source)
+	}
+}
+
+func TestMergeEntries_NoDuplicates(t *testing.T) {
+	entries := []*Namespace{
+		{Name: "a", Value: NewExpr("1")},
+		{Name: "b", Value: NewExpr("2")},
+		{Name: "c", Value: NewExpr("3")},
+	}
+
+	merged := mergeEntries(entries)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(merged))
+	}
+
+	for i, ns := range entries {
+		if merged[i] != ns {
+			t.Errorf("position %d: expected same pointer", i)
+		}
+	}
+}
+
 func BenchmarkDefineNamespace(b *testing.B) {
 	ast, err := ParseString(context.Background(), "x : 1; y : 2; z : 3")
 	if err != nil {
