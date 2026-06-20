@@ -7,9 +7,8 @@
 // The package-level driver is a no-op until callers install handlers on it or
 // replace it with SetDefault.
 //
-// Go cannot express independent variadic groups; logging methods therefore
-// accept attrs as []slog.Attr followed by variadic message parts or a
-// printf-style format string:
+// Logging methods accept attrs as []slog.Attr followed by variadic message
+// parts or a printf-style format string:
 //
 //	Log(level Level, attrs []slog.Attr, parts ...string)
 //	Logf(level Level, attrs []slog.Attr, format string, args ...any)
@@ -37,7 +36,13 @@
 //
 // Reconfigure a handler at runtime:
 //
-//	handler, err := driver.AddHandler(log.HandlerOptions{Writer: os.Stdout, Format: log.FormatText, Level: log.LevelWarn})
+//	handler, err := driver.AddHandler(
+//		log.HandlerOptions{
+//			Writer: os.Stdout,
+//			Format: log.FormatText,
+//			Level:  log.LevelWarn,
+//		},
+//	)
 //	if err != nil {
 //		return err
 //	}

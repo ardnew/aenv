@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  // All task labels should be formatted "!<name> [qualifiers...]" so that they
+  // are easy to distinguish and are grouped by name when sorted.
+  "tasks": [
+    {
+      "label": "!debug eval",
+      "type": "process",
+      "command": [
+        "dlv",
+      ],
+      "args": [
+        "debug",
+        "${workspaceFolder}",
+        "--headless",
+        "--listen=:2345",
+        "--api-version=2",
+        "--allow-non-terminal-interactive",
+        "--",
+        "eval",
+        "-vvv",
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "go",
+        "fileLocation": "relative",
+        "pattern": {
+          "regexp": "^couldn't start listener:",
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*$",
+          "endsPattern": "^API server listening at:"
+        }
+      }
+    },
+    {
+      "label": "!debug clean",
+      "type": "shell",
+      "command": "rm -f __debug_bin*",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -102,8 +102,8 @@ func TestLogHandlerSpec_UnmarshalText_Invalid(t *testing.T) {
 		input   string
 		wantErr string
 	}{
-		{name: "level in format field", input: "-,info", wantErr: "invalid format"},
-		{name: "format in level field", input: "-,,text", wantErr: "invalid level"},
+		{name: "level in format field", input: "-,info", wantErr: "invalid log format"},
+		{name: "format in level field", input: "-,,text", wantErr: "invalid log level"},
 		{name: "too many fields", input: "-,json,info,extra", wantErr: "expected output[,format[,level]]"},
 	}
 
@@ -265,7 +265,7 @@ func runCLI(t *testing.T, args ...string) (string, error) {
 
 func assertExitCode(t *testing.T, err error, want int) {
 	t.Helper()
-	var coder exit.Coder
+	var coder kong.ExitCoder
 	if !errors.As(err, &coder) {
 		t.Fatalf("errors.As(%T, exit.Coder) = false", err)
 	}

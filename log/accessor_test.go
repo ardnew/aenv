@@ -64,18 +64,23 @@ func TestHandler_DisableEnable_TogglesDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	h, _ := driver.AddHandler(HandlerOptions{Writer: io.Discard, Format: FormatText, Level: LevelInfo})
-	if err := h.Disable(); err != nil {
-		t.Fatalf("Disable() error = %v", err)
+	err = driver.AddHandlers(HandlerOptions{Writer: io.Discard, Format: FormatText, Level: LevelInfo})
+	if err != nil {
+		t.Fatalf("AddHandlers() error = %v", err)
 	}
-	if h.Enabled() {
-		t.Fatal("Enabled() = true after Disable()")
-	}
-	if err := h.Enable(); err != nil {
-		t.Fatalf("Enable() error = %v", err)
-	}
-	if !h.Enabled() {
-		t.Fatal("Enabled() = false after Enable()")
+	for h := range driver.Handlers() {
+		if err := h.Disable(); err != nil {
+			t.Fatalf("Disable() error = %v", err)
+		}
+		if h.Enabled() {
+			t.Fatal("Enabled() = true after Disable()")
+		}
+		if err := h.Enable(); err != nil {
+			t.Fatalf("Enable() error = %v", err)
+		}
+		if !h.Enabled() {
+			t.Fatal("Enabled() = false after Enable()")
+		}
 	}
 }
 

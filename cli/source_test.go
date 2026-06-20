@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,31 +32,86 @@ func TestLogOutputKey_NormalizesConsoleAndExpandsFiles(t *testing.T) {
 	}
 }
 
+type envReader struct {
+	got []string
+}
+
+func (e *envReader) ReadFrom(r io.Reader) (int64, error) {
+	read, err := io.ReadAll(r)
+	nb := int64(len(read))
+	if err != nil {
+		return nb, err
+	}
+	if strings.TrimSpace(string(read)) == "" {
+		return nb, errors.New("empty source file")
+	}
+	e.got = append(e.got, string(read))
+	return nb, nil
+}
+
 func TestSourcePaths_AppendsDiscoveredEntry(t *testing.T) {
-	tmp := t.TempDir()
-	chdir(t, tmp)
-	entry := filepath.Join(tmp, ".aenv")
-	if err := os.WriteFile(entry, []byte("# entry"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	touch := func(path ...string) {
+		for _, p := range path {
+			if err := os.WriteFile(p, []byte(filepath.Base(p)), 0o600); err != nil {
+				t.Fatalf("WriteFile(%s) error = %v", p, err)
+			}
+		}
+	}
+	bases := func(paths ...string) []string {
+		r := make([]string, len(paths))
+		for i := range paths {
+			r[i] = filepath.Base(paths[i])
+		}
+		return r
 	}
 
-	explicit := []string{"a.aenv", "b.aenv"}
-	got := sourcePaths(explicit)
-	if len(got) < len(explicit) {
-		t.Fatalf("sourcePaths() = %v, want at least %v", got, explicit)
+	cwd := t.TempDir()
+	chdir(t, cwd)
+
+	explicit := []string{
+		filepath.Join(cwd, "a.aenv"),
+		filepath.Join(cwd, "b.aenv"),
 	}
-	if !slices.Equal(got[:len(explicit)], explicit) {
-		t.Fatalf("sourcePaths() prefix = %v, want %v", got[:len(explicit)], explicit)
+	automatic := filepath.Join(cwd, ".aenv")
+
+	touch(append(explicit, automatic)...)
+
+	e := &envReader{}
+
+	if err := withSources(explicit, e); err != nil {
+		t.Fatal("default file sourced when explicit source files provided")
 	}
-	if !slices.Contains(got, entry) {
-		t.Fatalf("sourcePaths() = %v, want to contain discovered entry %q", got, entry)
+
+	if !slices.Equal(e.got, bases(explicit...)) {
+		t.Fatalf("withSources() = %v, want %v", e.got, bases(explicit...))
+	}
+
+	e.got = []string{}
+	if err := withSources(nil, e); err != nil {
+		t.Fatalf("withSources() error = %v", err)
+	}
+
+	if !slices.Equal(e.got, bases(automatic)) {
+		t.Fatalf("withSources() = %v, want %v", e.got, bases(automatic))
 	}
 }
 
-func TestLogSources_EmitsOnePerSource(t *testing.T) {
+type discardReader struct{}
+
+func (d discardReader) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(io.Discard, r)
+}
+
+func TestWithSources_LogsOnePerSource(t *testing.T) {
 	restoreDefaultLogger(t)
 	tmp := t.TempDir()
 	chdir(t, tmp) // avoid discovering an ambient entry file
+
+	for _, src := range []string{"one.aenv", "two.aenv"} {
+		if err := os.WriteFile(src, []byte(""), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", src, err)
+		}
+	}
 
 	var buf terminalWriter
 	driver, err := log.New(log.HandlerOptions{Writer: &buf, Format: log.FormatText, Level: log.LevelTrace})
@@ -63,16 +120,24 @@ func TestLogSources_EmitsOnePerSource(t *testing.T) {
 	}
 	log.SetDefault(driver)
 
-	logSources([]string{"one.aenv", "two.aenv"})
+	if err := withSources([]string{"one.aenv", "two.aenv"}, discardReader{}); err != nil {
+		t.Fatalf("withSources() error = %v", err)
+	}
 
 	out := buf.String()
-	if got := strings.Count(out, "processing source"); got < 2 {
-		t.Fatalf("logSources emitted %d records, want at least 2:\n%s", got, out)
+	if got := strings.Count(out, ":: read source\n"); got != 2 {
+		t.Fatalf("withSources emitted %d read-source records, want 2:\n%s", got, out)
 	}
 	for _, want := range []string{"one.aenv", "two.aenv"} {
-		if strings.Count(out, want) != 1 {
-			t.Fatalf("logSources output want exactly one %q:\n%s", want, out)
+		if strings.Count(out, "attr.path="+want) != 1 {
+			t.Fatalf("withSources output want exactly one %q attr:\n%s", want, out)
 		}
+	}
+	if got := strings.Count(out, "attr.kind=explicit"); got != 2 {
+		t.Fatalf("withSources emitted %d explicit source attrs, want 2:\n%s", got, out)
+	}
+	if !strings.Contains(out, "attr.index=1") || !strings.Contains(out, "attr.index=2") {
+		t.Fatalf("withSources output missing explicit source indices:\n%s", out)
 	}
 }
 

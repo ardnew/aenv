@@ -7,26 +7,18 @@ import (
 	"sync"
 )
 
-// CachePath returns the absolute path to a file or directory formed by joining
-// the global cache directory path with the given path elements.
+// CachePath joins elem onto the cache directory and returns an absolute path.
 func CachePath(elem ...string) string {
 	return filepath.Join(append([]string{cacheDir()}, elem...)...)
 }
 
-// ConfigPath returns the absolute path to a file or directory formed by joining
-// the global config directory path with the given path elements.
+// ConfigPath joins elem onto the config directory and returns an absolute path.
 func ConfigPath(elem ...string) string {
 	return filepath.Join(append([]string{configDir()}, elem...)...)
 }
 
-// EntryPath returns the absolute path to the interpreter's entry point
-// and true if the entry point is a regular file.
-// Otherwise, it returns an empty string and false.
-//
-// The lookup order is [localEntryFile] in the current working directory and
-// each ancestor up to the user's home directory or [rootPrefix], then
-// [localEntryFile] in the user's home directory if it was not already checked,
-// then [globalEntryFile] in XDG config directories.
+// EntryPath returns the entry-point file path and true, or "" and false if
+// none is found.
 func EntryPath() (string, bool) {
 	cwd, err := os.Getwd()
 	if err != nil {

@@ -47,7 +47,7 @@ func (s *logHandlerSpec) UnmarshalText(text []byte) error {
 	fields := strings.Split(string(text), ",")
 	if len(fields) > 3 {
 		return Error{
-			Err:  errors.New("invalid log handler: expected " + logHandlerSyntax),
+			Err:  errf(log.ErrInvalidHandler, "expected %s", logHandlerSyntax),
 			Code: exit.Usage,
 		}
 	}
@@ -92,7 +92,7 @@ func openLogHandler(specs []logHandlerSpec, verbose int) ([]io.Closer, error) {
 	closers := []io.Closer{}
 	options := []log.HandlerOptions{}
 	specs = mergeLogHandlerSpecs(specs)
-	attributes := make([][]slog.Attr, 0, len(specs))
+	configured := make([][]slog.Attr, 0, len(specs))
 	replaceConsole := false
 
 	for _, spec := range specs {
@@ -113,11 +113,12 @@ func openLogHandler(specs []logHandlerSpec, verbose int) ([]io.Closer, error) {
 		if console {
 			replaceConsole = true
 		}
-		attributes = append(attributes, []slog.Attr{
-			slog.String("output", spec.output),
-			slog.String("format", format.String()),
-			slog.String("level", level.String()),
-		})
+		configured = append(configured, log.Attrs(
+			"output", spec.output,
+			"format", format.String(),
+			"level", level.String(),
+			"console", console,
+		))
 		options = append(options, log.HandlerOptions{
 			Writer: writer,
 			Format: format,
@@ -126,11 +127,12 @@ func openLogHandler(specs []logHandlerSpec, verbose int) ([]io.Closer, error) {
 	}
 
 	if !replaceConsole {
-		attributes = append(attributes, []slog.Attr{
-			slog.String("output", "stdout"),
-			slog.String("format", log.FormatText.String()),
-			slog.String("level", log.LevelWarn.String()),
-		})
+		configured = append(configured, log.Attrs(
+			"output", "stdout",
+			"format", log.FormatText.String(),
+			"level", adjustLevel(log.LevelWarn, verbose).String(),
+			"console", true,
+		))
 		options = append([]log.HandlerOptions{{
 			Writer: os.Stdout,
 			Format: log.FormatText,
@@ -144,8 +146,13 @@ func openLogHandler(specs []logHandlerSpec, verbose int) ([]io.Closer, error) {
 		return nil, err
 	}
 	log.SetDefault(driver)
-	for _, attr := range attributes {
-		log.Trace(attr, "log handler opened")
+	log.Debug(log.Attrs(
+		"handlers", len(options),
+		"verbose", verbose,
+		"default-console", !replaceConsole,
+	), "logging configured")
+	for _, attr := range configured {
+		log.Trace(attr)
 	}
 	return closers, nil
 }
@@ -243,7 +250,6 @@ func adjustLevel(base log.Level, verbose int) log.Level {
 
 func closeLogHandlers(closers []io.Closer) error {
 	var err error
-	log.Trace(nil, "closing all log handlers")
 	for _, closer := range closers {
 		if closer != nil {
 			err = errors.Join(err, closer.Close())

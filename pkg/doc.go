@@ -1,2 +1,2 @@
-// Package pkg exports project metadata and runtime path utilities for aenv.
+// Package pkg provides project metadata and path lookups for aenv.
 package pkg

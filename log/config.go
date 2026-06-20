@@ -1,14 +1,13 @@
 package log
 
 import (
-	"fmt"
 	"io"
 
 	"golang.org/x/term"
 )
 
-// Level is log severity ordered by increasing verbosity.
-// The zero value is invalid; variables must be explicitly initialized.
+// Level is a log severity. Higher values are more verbose. The zero value is
+// invalid.
 type Level uint8
 
 //go:generate go tool stringer -linecomment -type=Level
@@ -37,12 +36,12 @@ func (l *Level) UnmarshalText(text []byte) error {
 	case "trace":
 		*l = LevelTrace
 	default:
-		return fmt.Errorf("log: invalid level: %s", text)
+		return errf(ErrInvalidLevel, "%s", text)
 	}
 	return nil
 }
 
-// Symbol returns the terminal badge for the level (for example, "+" or ":").
+// Symbol returns the level's terminal badge.
 func (l Level) Symbol() string {
 	switch l {
 	case LevelError:
@@ -60,22 +59,21 @@ func (l Level) Symbol() string {
 	}
 }
 
-// LevelRange returns the inclusive range of valid log levels.
+// LevelRange returns the lowest and highest valid levels.
 func LevelRange() (min, max Level) { return levelMin, levelMax }
 
-// Valid reports whether the level is a recognized severity.
+// Valid reports whether the level is recognized.
 func (l Level) Valid() bool {
 	return l >= levelMin && l <= levelMax
 }
 
-// Allows reports whether a handler configured at this level would forward a
-// record at the given level.
+// Allows reports whether a handler at this level forwards a record at the given
+// level.
 func (l Level) Allows(record Level) bool {
 	return l.Valid() && record.Valid() && record <= l
 }
 
-// Format is the output encoding for a Handler.
-// The zero value is invalid; variables must be explicitly initialized.
+// Format is a Handler output encoding. The zero value is invalid.
 type Format uint8
 
 //go:generate go tool stringer -linecomment -type=Format
@@ -95,27 +93,26 @@ func (f *Format) UnmarshalText(text []byte) error {
 	case "json":
 		*f = FormatJSON
 	default:
-		return fmt.Errorf("log: invalid format: %s", text)
+		return errf(ErrInvalidFormat, "%s", text)
 	}
 	return nil
 }
 
-// FormatRange returns the inclusive range of valid log formats.
+// FormatRange returns the lowest and highest valid formats.
 func FormatRange() (min, max Format) { return formatMin, formatMax }
 
-// Valid reports whether the format is a recognized log format.
+// Valid reports whether the format is recognized.
 func (f Format) Valid() bool {
 	return f >= formatMin && f <= formatMax
 }
 
-// HandlerOptions configures a new Handler.
+// HandlerOptions configures a Handler.
 type HandlerOptions struct {
-	// Writer is the output destination; must not be nil.
+	// Writer is the output. Required.
 	Writer io.Writer
-	// Format is the output encoding: FormatText or FormatJSON.
+	// Format is the output encoding.
 	Format Format
-	// Level is the maximum level forwarded by this handler;
-	// events above this are silenced.
+	// Level is the highest level forwarded; higher levels are dropped.
 	Level Level
 }
 
@@ -142,13 +139,13 @@ const (
 
 func newHandlerConfig(options HandlerOptions) (handlerConfig, error) {
 	if options.Writer == nil {
-		return handlerConfig{}, fmt.Errorf("log: nil writer")
+		return handlerConfig{}, ErrNilWriter
 	}
 	if !options.Format.Valid() {
-		return handlerConfig{}, fmt.Errorf("log: invalid format %d", options.Format)
+		return handlerConfig{}, errf(ErrInvalidFormat, "%d", options.Format)
 	}
 	if !options.Level.Valid() {
-		return handlerConfig{}, fmt.Errorf("log: invalid level %d", options.Level)
+		return handlerConfig{}, errf(ErrInvalidLevel, "%d", options.Level)
 	}
 	return handlerConfig{
 		writer:  options.Writer,
@@ -159,22 +156,23 @@ func newHandlerConfig(options HandlerOptions) (handlerConfig, error) {
 	}, nil
 }
 
-// TerminalWriter is implemented by writers that target a terminal regardless of
-// any underlying file descriptor. It lets callers mark in-memory writers (for
-// example, test buffers) as terminals so format and source defaults apply.
+// TerminalWriter lets a writer declare itself a terminal, so callers can mark
+// in-memory writers as terminals for format and source defaults.
 type TerminalWriter interface {
 	// IsTerminalWriter reports whether the writer targets a terminal.
 	IsTerminalWriter() bool
 }
 
-// IsTerminal reports whether writer is connected to a terminal.
-// A writer is treated as a terminal if it implements TerminalWriter and reports
-// true, or if it exposes an Fd that term.IsTerminal recognizes.
+// IsTerminal reports whether writer targets a terminal. A writer qualifies if
+// it implements TerminalWriter and reports true, or exposes an Fd that
+// term.IsTerminal recognizes.
 func IsTerminal(writer io.Writer) bool {
-	if marker, ok := writer.(TerminalWriter); ok && marker.IsTerminalWriter() {
+	marker, ok := writer.(TerminalWriter)
+	if ok && marker.IsTerminalWriter() {
 		return true
 	}
-	if descriptor, ok := writer.(interface{ Fd() uintptr }); ok && term.IsTerminal(int(descriptor.Fd())) {
+	descriptor, ok := writer.(interface{ Fd() uintptr })
+	if ok && term.IsTerminal(int(descriptor.Fd())) {
 		return true
 	}
 	return false

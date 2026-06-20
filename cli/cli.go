@@ -3,10 +3,10 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
-	"strings"
+	"os"
 
 	"github.com/ardnew/aenv/exit"
 	"github.com/ardnew/aenv/log"
@@ -14,41 +14,6 @@ import (
 
 	"github.com/alecthomas/kong"
 )
-
-// Namespace defines a namespaced environment generator as an argument with
-// optional flags. Any additional arguments are forwarded when generating a
-// parametric namespace and are ignored otherwise.
-// Flags are used to modify the behavior of the environment generator and are
-// applicable to all namespaces.
-type Namespace struct {
-	logFlags
-	inputFlags
-
-	// Namespace is the name of the environment namespace to generate.
-	Namespace string   `arg:""`
-	// Args are forwarded to the namespace generator.
-	Args      []string `arg:"" optional:"" name:"args" help:"Namespace arguments."`
-}
-
-// Eval defines the eval subcommand and flags for starting an interactive REPL
-// to evaluate namespaces and other expressions.
-type Eval struct {
-	logFlags
-	inputFlags
-}
-
-// Version defines the version subcommand and its flags.
-// The flags are mutually exclusive and modify the subcommand's output.
-type Version struct {
-	// Semantic prints only the semantic version string.
-	Semantic bool `help:"Print only the semantic version." short:"s" xor:"version-output"`
-	// URL prints the project URL.
-	URL      bool `help:"Print the project URL." xor:"version-output"`
-	// Repo prints the repository URL.
-	Repo     bool `help:"Print the repository URL." xor:"version-output"`
-	// License prints the license text.
-	License  bool `help:"Print the license." xor:"version-output"`
-}
 
 type logFlags struct {
 	Verbose int              `help:"Increase log verbosity (repeatable)." short:"v" type:"counter"`
@@ -68,7 +33,7 @@ type syntax struct {
 
 const outputWidthMax = 88 // you're gonna see some serious shit
 
-// Run parses command-line arguments and executes the appropriate subcommand.
+// Run parses the command line and runs the selected subcommand.
 func Run(ctx context.Context) error {
 	var stx syntax
 
@@ -87,43 +52,11 @@ func Run(ctx context.Context) error {
 		kong.Vars{
 			"logHandlerSyntax": logHandlerSyntax,
 		},
-		kong.BindTo(ctx, (*context.Context)(nil)),
+		kong.BindTo(ctx, (*context.Context)(nil)), // bind the value, not a pointer
 	).Run()
 }
 
-func (n Namespace) Run() error {
-	return withLogHandlers(n.logFlags, func() error {
-		logSources(n.Source)
-		return nil
-	})
-}
-
-func (e Eval) Run(ctx context.Context) error {
-	return withLogHandlers(e.logFlags, func() error {
-		logSources(e.Source)
-		return withExitCode(runREPL(ctx), exit.OS)
-	})
-}
-
-func (v Version) Run(app *kong.Kong) error {
-	version := strings.TrimSpace(pkg.Meta.Version)
-	var err error
-	switch {
-	case v.Semantic:
-		_, err = fmt.Fprintln(app.Stdout, version)
-	case v.URL:
-		_, err = fmt.Fprintln(app.Stdout, pkg.ProjectURL)
-	case v.Repo:
-		_, err = fmt.Fprintln(app.Stdout, pkg.RepoURL)
-	case v.License:
-		_, err = fmt.Fprintln(app.Stdout, pkg.Meta.License)
-	default:
-		_, err = fmt.Fprintln(app.Stdout, pkg.Name, "version", version)
-	}
-	return withExitCode(err, exit.IO)
-}
-
-func wrapLogHandlerError(err error) error {
+func wrapPathError(err error) error {
 	if err, ok := errors.AsType[*fs.PathError](err); ok {
 		return withExitCode(err, exit.Create)
 	}
@@ -133,24 +66,89 @@ func wrapLogHandlerError(err error) error {
 func withLogHandlers(flags logFlags, fn func() error) (err error) {
 	closers, err := openLogHandler(flags.Log, flags.Verbose)
 	if err != nil {
-		return wrapLogHandlerError(err)
+		return wrapPathError(err)
 	}
 
-	defer func() { err = errors.Join(err, withExitCode(closeLogHandlers(closers), exit.IO)) }()
+	defer func() {
+		err = errors.Join(err, withExitCode(closeLogHandlers(closers), exit.IO))
+	}()
 
 	return fn()
 }
 
-func logSources(source []string) {
-	for _, str := range sourcePaths(source) {
-		log.Info([]slog.Attr{slog.String("source", str)}, "processing source")
+type (
+	sourceDef struct {
+		path, kind   string
+		index, count int
 	}
+	readerYielder func(io.ReaderFrom) (int64, error)
+)
+
+func makeExplicitSource(path string, idx, sum int) sourceDef {
+	return sourceDef{path: path, kind: "explicit", index: idx, count: sum}
 }
 
-func sourcePaths(source []string) []string {
-	paths := append([]string(nil), source...)
-	if path, ok := pkg.EntryPath(); ok {
-		paths = append(paths, path)
+func makeDiscoveredSource(path string) sourceDef {
+	return sourceDef{path: path, kind: "discovered"}
+}
+
+func (s sourceDef) attrs() []slog.Attr {
+	attrs := log.Attrs("path", s.path, "kind", s.kind)
+	if s.count > 1 { // show the index if there are multiple sources
+		attrs = append(attrs, slog.Int("index", s.index))
 	}
-	return paths
+	return attrs
+}
+
+// yieldFrom is a helper that logs and opens a source file for reading
+// by passing an [io.Reader] to the provided function.
+//
+// It guarantees that the file is closed after the function returns,
+// so the caller can read as much as they want without cleaning up.
+//
+// It is called for each explicitly provided source, or, if no sources were
+// provided, it is called once with the first discovered via [pkg.EntryPath].
+
+func (s sourceDef) WriteTo(w io.ReaderFrom) (int64, error) {
+	f, err := os.Open(s.path)
+	if err != nil {
+		return 0, wrapPathError(err)
+	}
+	defer func() {
+		closeErr := f.Close()
+		if err == nil && closeErr != nil {
+			err = withExitCode(closeErr, exit.IO)
+		}
+	}()
+	log.Trace(s.attrs(), "read source")
+	return w.ReadFrom(f)
+}
+
+func withSources(source []string, dst io.ReaderFrom) error {
+
+	count := len(source)
+	if count > 0 {
+		log.Debug(log.Attrs("count", count), "explicit source(s) provided")
+	}
+
+	for i, src := range source {
+		_, err := makeExplicitSource(src, i+1, count).WriteTo(dst)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Search for an entry file only if no explicit sources were provided.
+	if count == 0 {
+		str, ok := pkg.EntryPath()
+		if !ok {
+			return withExitCode(nil, exit.NoInput)
+		}
+		_, err := makeDiscoveredSource(str).WriteTo(dst)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

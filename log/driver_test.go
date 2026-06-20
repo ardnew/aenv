@@ -311,12 +311,14 @@ func TestDriver_RemoveHandler_StopsDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	h, err := driver.AddHandler(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelInfo})
+	err = driver.AddHandlers(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelInfo})
 	if err != nil {
 		t.Fatalf("AddHandler() error = %v", err)
 	}
-	if ok := driver.RemoveHandler(h); !ok {
-		t.Fatal("RemoveHandler() = false, want true")
+	for h := range driver.Handlers() {
+		if ok := driver.RemoveHandlers(h); !ok {
+			t.Fatal("RemoveHandler() = false, want true")
+		}
 	}
 
 	driver.Info(nil, "gone")
@@ -334,28 +336,32 @@ func TestHandler_Setters_ReconfigureDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	h, err := driver.AddHandler(HandlerOptions{Writer: &first, Format: FormatText, Level: LevelInfo})
+	err = driver.AddHandlers(HandlerOptions{Writer: &first, Format: FormatText, Level: LevelInfo})
 	if err != nil {
 		t.Fatalf("AddHandler() error = %v", err)
 	}
 
-	firstSite := nextCallSite(t)
-	driver.Info(nil, "before")
-	if err := h.Disable(); err != nil {
-		t.Fatalf("Disable() error = %v", err)
-	}
-	driver.Error(nil, "hidden")
-	if err := h.Enable(); err != nil {
-		t.Fatalf("Enable() error = %v", err)
-	}
-	if err := h.SetLevel(LevelTrace); err != nil {
-		t.Fatalf("SetLevel() error = %v", err)
-	}
-	if err := h.SetFormat(FormatJSON); err != nil {
-		t.Fatalf("SetFormat() error = %v", err)
-	}
-	if err := h.SetWriter(&second); err != nil {
-		t.Fatalf("SetWriter() error = %v", err)
+	var firstSite callSite
+
+	for h := range driver.Handlers() {
+		firstSite = nextCallSite(t)
+		driver.Info(nil, "before")
+		if err := h.Disable(); err != nil {
+			t.Fatalf("Disable() error = %v", err)
+		}
+		driver.Error(nil, "hidden")
+		if err := h.Enable(); err != nil {
+			t.Fatalf("Enable() error = %v", err)
+		}
+		if err := h.SetLevel(LevelTrace); err != nil {
+			t.Fatalf("SetLevel() error = %v", err)
+		}
+		if err := h.SetFormat(FormatJSON); err != nil {
+			t.Fatalf("SetFormat() error = %v", err)
+		}
+		if err := h.SetWriter(&second); err != nil {
+			t.Fatalf("SetWriter() error = %v", err)
+		}
 	}
 	secondSite := nextCallSite(t)
 	driver.Trace([]slog.Attr{slog.String("scope", "after")}, "after")
@@ -408,8 +414,8 @@ func TestDriver_Handlers_DoesNotOverwriteLaterUpdates(t *testing.T) {
 	}
 
 	handlers := driver.Handlers()
-	if _, err := driver.AddHandler(HandlerOptions{Writer: &second, Format: FormatText, Level: LevelInfo}); err != nil {
-		t.Fatalf("AddHandler() error = %v", err)
+	if err := driver.AddHandlers(HandlerOptions{Writer: &second, Format: FormatText, Level: LevelInfo}); err != nil {
+		t.Fatalf("AddHandlers() error = %v", err)
 	}
 
 	for range handlers {
@@ -540,7 +546,7 @@ func TestDriver_Log_ZeroValueDriver(t *testing.T) {
 	setTestNow(t)
 	var out bytes.Buffer
 	var driver Driver
-	if _, err := driver.AddHandler(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelInfo}); err != nil {
+	if err := driver.AddHandlers(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelInfo}); err != nil {
 		t.Fatalf("AddHandler() error = %v", err)
 	}
 

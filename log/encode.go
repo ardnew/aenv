@@ -441,6 +441,9 @@ func appendJSONAttr(buf *bytes.Buffer, first *bool, attr slog.Attr) {
 }
 
 func appendJSONField(buf *bytes.Buffer, first *bool, key, value string) {
+	if value == "" {
+		return // omit all fields with empty values
+	}
 	if !*first {
 		buf.WriteByte(',')
 	}

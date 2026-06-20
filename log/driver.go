@@ -28,34 +28,32 @@ func init() {
 	defaultDriverStore.Store(newDriver())
 }
 
-// Driver fans out log records to one or more handlers.
+// Driver sends each record to its handlers.
 type Driver struct {
 	mu          sync.Mutex
 	handlers    atomic.Value
 	sourceCache map[uintptr]callsite
 }
 
-// Handler delivers encoded log records to a single writer.
+// Handler writes records to one writer.
 type Handler struct {
 	writeMu  sync.Mutex
 	configMu sync.Mutex
 	config   atomic.Value
 }
 
-// New creates a Driver with one Handler per supplied HandlerOptions.
-// It returns an error if any option set is invalid.
+// New returns a Driver with one handler per option. It errors on an invalid
+// option.
 func New(options ...HandlerOptions) (*Driver, error) {
 	driver := newDriver()
-	for _, option := range options {
-		if _, err := driver.AddHandler(option); err != nil {
-			return nil, err
-		}
+	if err := driver.AddHandlers(options...); err != nil {
+		return nil, err
 	}
 	return driver, nil
 }
 
-// Default returns the package-level driver.
-// The default is a no-op until SetDefault is called or a handler is added.
+// Default returns the package driver. It is a no-op until a handler is added or
+// SetDefault is called.
 func Default() *Driver {
 	if driver, ok := defaultDriverStore.Load().(*Driver); ok && driver != nil {
 		return driver
@@ -65,8 +63,7 @@ func Default() *Driver {
 	return driver
 }
 
-// SetDefault replaces the package-level driver.
-// Passing nil installs a fresh no-op driver.
+// SetDefault replaces the package driver. Nil installs a no-op driver.
 func SetDefault(driver *Driver) {
 	if driver == nil {
 		driver = newDriver()
@@ -77,46 +74,66 @@ func SetDefault(driver *Driver) {
 	defaultDriverStore.Store(driver)
 }
 
-// AddHandler creates a Handler from options and appends it to the driver.
-func (d *Driver) AddHandler(options HandlerOptions) (*Handler, error) {
-	if d == nil {
-		return nil, fmt.Errorf("log: nil driver")
+// AddHandlers adds a [Handler] built from each of the given [HandlerOptions].
+// It returns the first error from building a handler, if any, without adding
+// remaining handlers.
+func (d *Driver) AddHandlers(options ...HandlerOptions) error {
+	if len(options) == 0 {
+		return nil
 	}
-	handler, err := newHandler(options)
-	if err != nil {
-		return nil, err
+	if d == nil {
+		return ErrNilDriver
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	handlers := append([]*Handler(nil), d.snapshotHandlers()...)
-	handlers = append(handlers, handler)
-	d.handlers.Store(handlers)
-	return handler, nil
+	// Copy the snapshot to avoid races with concurrent readers of the slice.
+	snapshot := append([]*Handler(nil), d.snapshotHandlers()...)
+	for _, option := range options {
+		handler, err := newHandler(option)
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, handler)
+	}
+	d.handlers.Store(snapshot)
+	return nil
 }
 
-// RemoveHandler removes the given handler from the driver.
-// It reports whether the handler was found.
-func (d *Driver) RemoveHandler(handler *Handler) bool {
-	if d == nil || handler == nil {
+// RemoveHandlers removes each given [Handler], or it removes all when called
+// with no arguments, and returns whether any [Handler] was removed.
+func (d *Driver) RemoveHandlers(handlers ...*Handler) bool {
+	if d == nil {
 		return false
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	handlers := d.snapshotHandlers()
-	for index, current := range handlers {
-		if current != handler {
-			continue
-		}
-		updated := make([]*Handler, 0, len(handlers)-1)
-		updated = append(updated, handlers[:index]...)
-		updated = append(updated, handlers[index+1:]...)
+	if len(handlers) == 0 {
+		return d.resetHandlers()
+	}
+	var found bool
+	var updated []*Handler
+	err := d.MapHandlers(
+		func(h *Handler) bool {
+			if h.isElementOf(handlers) {
+				found = true
+				return false
+			}
+			return true
+		},
+		func(h *Handler) error {
+			updated = append(updated, h)
+			return nil
+		},
+	)
+	if err != nil {
+		return false
+	}
+	if found {
 		d.handlers.Store(updated)
 		return true
 	}
 	return false
 }
 
-// Handlers returns an iterator over a snapshot of the driver's current handlers.
+// Handlers iterates a snapshot of the driver's handlers.
 func (d *Driver) Handlers() iter.Seq[*Handler] {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -130,7 +147,66 @@ func (d *Driver) Handlers() iter.Seq[*Handler] {
 	}
 }
 
-// Enabled reports whether the handler is currently active.
+// MapHandlers applies fn to each [Handler] predicated by want.
+// It returns the first error returned by fn, if any, without evaluating fn on
+// remaining handlers.
+//
+// It is safe to call [Handler] methods within fn, but calling [Driver] methods
+// is undefined behavior and may cause a deadlock.
+func (d *Driver) MapHandlers(
+	want func(*Handler) bool,
+	fn func(*Handler) error,
+) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	handlers := d.snapshotHandlers()
+	for _, handler := range handlers {
+		if !want(handler) {
+			continue
+		}
+		if err := fn(handler); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddHandlers calls [Driver.AddHandlers] on the package-level driver.
+func AddHandlers(options ...HandlerOptions) error {
+	return Default().AddHandlers(options...)
+}
+
+// RemoveHandlers calls [Driver.RemoveHandlers] on the package-level driver.
+func RemoveHandlers(handlers ...*Handler) bool {
+	return Default().RemoveHandlers(handlers...)
+}
+
+// Handlers calls [Driver.Handlers] on the package-level driver.
+func Handlers() iter.Seq[*Handler] {
+	return Default().Handlers()
+}
+
+// MapHandlers calls [Driver.MapHandlers] on the package-level driver.
+func MapHandlers(want func(*Handler) bool, fn func(*Handler) error) error {
+	return Default().MapHandlers(want, fn)
+}
+
+// IsTerminalHandler is a predicate matching enabled terminal writers.
+func IsTerminalHandler(h *Handler) bool {
+	return IsEnabledHandler(h) && h.IsTerminal()
+}
+
+// IsEnabledHandler is a predicate matching enabled [Handler]s.
+func IsEnabledHandler(h *Handler) bool {
+	return IsHandler(h) && h.Enabled()
+}
+
+// IsHandler is a predicate matching non-nil [Handler]s.
+func IsHandler(h *Handler) bool {
+	return h != nil
+}
+
+// Enabled reports whether the handler receives records.
 func (h *Handler) Enabled() bool {
 	config, ok := h.snapshotConfig()
 	if !ok {
@@ -139,8 +215,8 @@ func (h *Handler) Enabled() bool {
 	return config.enabled
 }
 
-// Options returns the handler's current configuration and true.
-// If the handler is uninitialized, returns an empty configuration and false.
+// Options returns the handler's configuration. The second result is false if
+// the handler is uninitialized.
 func (h *Handler) Options() (HandlerOptions, bool) {
 	config, ok := h.snapshotConfig()
 	if !ok {
@@ -153,8 +229,8 @@ func (h *Handler) Options() (HandlerOptions, bool) {
 	}, true
 }
 
-// Writer returns the handler's current output destination and true.
-// If the handler is uninitialized, returns nil and false.
+// Writer returns the handler's output. The second result is false if the
+// handler is uninitialized.
 func (h *Handler) Writer() (io.Writer, bool) {
 	config, ok := h.snapshotConfig()
 	if !ok {
@@ -163,8 +239,18 @@ func (h *Handler) Writer() (io.Writer, bool) {
 	return config.writer, true
 }
 
-// Format returns the handler's current output encoding and true.
-// If the handler is uninitialized, returns an invalid [Format] and false.
+// IsTerminal returns whether the handler writes to a terminal.
+// It also returns false if the handler is uninitialized.
+func (h *Handler) IsTerminal() bool {
+	config, ok := h.snapshotConfig()
+	if !ok {
+		return false
+	}
+	return config.target == targetTerminal
+}
+
+// Format returns the handler's output encoding. The second result is false if
+// the handler is uninitialized.
 func (h *Handler) Format() (Format, bool) {
 	config, ok := h.snapshotConfig()
 	if !ok {
@@ -174,8 +260,8 @@ func (h *Handler) Format() (Format, bool) {
 	return config.format, true
 }
 
-// Level returns the handler's current maximum level and true.
-// If the handler is uninitialized, returns an invalid [Level] and false.
+// Level returns the handler's highest forwarded level. The second result is
+// false if the handler is uninitialized.
 func (h *Handler) Level() (Level, bool) {
 	config, ok := h.snapshotConfig()
 	if !ok {
@@ -185,7 +271,7 @@ func (h *Handler) Level() (Level, bool) {
 	return config.level, true
 }
 
-// Enable re-enables a previously disabled handler.
+// Enable resumes a disabled handler.
 func (h *Handler) Enable() error {
 	return h.updateConfig(func(config handlerConfig) (handlerConfig, error) {
 		config.enabled = true
@@ -193,7 +279,7 @@ func (h *Handler) Enable() error {
 	})
 }
 
-// Disable stops the handler from receiving log records without removing it.
+// Disable stops the handler from receiving records.
 func (h *Handler) Disable() error {
 	return h.updateConfig(func(config handlerConfig) (handlerConfig, error) {
 		config.enabled = false
@@ -201,12 +287,11 @@ func (h *Handler) Disable() error {
 	})
 }
 
-// SetWriter replaces the handler's output writer.
-// It returns an error if writer is nil.
+// SetWriter replaces the output. It errors on a nil writer.
 func (h *Handler) SetWriter(writer io.Writer) error {
 	return h.updateConfig(func(config handlerConfig) (handlerConfig, error) {
 		if writer == nil {
-			return config, fmt.Errorf("log: nil writer")
+			return config, ErrNilWriter
 		}
 		config.writer = writer
 		config.target = detectOutputTarget(writer)
@@ -214,91 +299,89 @@ func (h *Handler) SetWriter(writer io.Writer) error {
 	})
 }
 
-// SetFormat changes the handler's output encoding.
-// It returns an error if format is invalid.
+// SetFormat replaces the output encoding. It errors on an invalid format.
 func (h *Handler) SetFormat(format Format) error {
 	return h.updateConfig(func(config handlerConfig) (handlerConfig, error) {
 		if !format.Valid() {
-			return config, fmt.Errorf("log: invalid format %d", format)
+			return config, errf(ErrInvalidFormat, "%d", format)
 		}
 		config.format = format
 		return config, nil
 	})
 }
 
-// SetLevel changes the handler's maximum level.
-// It returns an error if level is invalid.
+// SetLevel sets the highest level forwarded. It errors on an invalid level.
 func (h *Handler) SetLevel(level Level) error {
 	level = min(level, levelMax) // Clamp high - the user wants to see everything.
 	return h.updateConfig(func(config handlerConfig) (handlerConfig, error) {
 		if !level.Valid() {
-			return config, fmt.Errorf("log: invalid level %d", level)
+			return config, errf(ErrInvalidLevel, "%d", level)
 		}
 		config.level = level
 		return config, nil
 	})
 }
 
-// Log emits a record at level, joining parts with a single space.
+// Log emits a record at level. Parts join with a space.
 func (d *Driver) Log(level Level, attrs []slog.Attr, parts ...string) {
 	d.emit(level, attrs, joinParts(parts))
 }
 
-// Logf emits a record at level using fmt.Sprintf formatting.
+// Logf emits a record at level, formatted by fmt.Sprintf.
 func (d *Driver) Logf(level Level, attrs []slog.Attr, format string, args ...any) {
 	d.emit(level, attrs, sprintfMessage(format, args))
 }
 
-// Error emits a record at LevelError, joining parts with a single space.
+// Error emits a record at LevelError. Parts join with a space.
 func (d *Driver) Error(attrs []slog.Attr, parts ...string) {
 	d.emit(LevelError, attrs, joinParts(parts))
 }
 
-// Errorf emits a record at LevelError using fmt.Sprintf formatting.
+// Errorf emits a record at LevelError, formatted by fmt.Sprintf.
 func (d *Driver) Errorf(attrs []slog.Attr, format string, args ...any) {
 	d.emit(LevelError, attrs, sprintfMessage(format, args))
 }
 
-// Warn emits a record at LevelWarn, joining parts with a single space.
+// Warn emits a record at LevelWarn. Parts join with a space.
 func (d *Driver) Warn(attrs []slog.Attr, parts ...string) {
 	d.emit(LevelWarn, attrs, joinParts(parts))
 }
 
-// Warnf emits a record at LevelWarn using fmt.Sprintf formatting.
+// Warnf emits a record at LevelWarn, formatted by fmt.Sprintf.
 func (d *Driver) Warnf(attrs []slog.Attr, format string, args ...any) {
 	d.emit(LevelWarn, attrs, sprintfMessage(format, args))
 }
 
-// Info emits a record at LevelInfo, joining parts with a single space.
+// Info emits a record at LevelInfo. Parts join with a space.
 func (d *Driver) Info(attrs []slog.Attr, parts ...string) {
 	d.emit(LevelInfo, attrs, joinParts(parts))
 }
 
-// Infof emits a record at LevelInfo using fmt.Sprintf formatting.
+// Infof emits a record at LevelInfo, formatted by fmt.Sprintf.
 func (d *Driver) Infof(attrs []slog.Attr, format string, args ...any) {
 	d.emit(LevelInfo, attrs, sprintfMessage(format, args))
 }
 
-// Debug emits a record at LevelDebug, joining parts with a single space.
-// Terminal text output includes the call site for debug and trace records.
+// Debug emits a record at LevelDebug. Parts join with a space.
+// Terminal text adds the call site.
 func (d *Driver) Debug(attrs []slog.Attr, parts ...string) {
 	d.emit(LevelDebug, attrs, joinParts(parts))
 }
 
-// Debugf emits a record at LevelDebug using fmt.Sprintf formatting.
-// Terminal text output includes the call site for debug and trace records.
+// Debugf emits a record at LevelDebug, formatted by fmt.Sprintf.
+// Terminal text adds the call site.
 func (d *Driver) Debugf(attrs []slog.Attr, format string, args ...any) {
 	d.emit(LevelDebug, attrs, sprintfMessage(format, args))
 }
 
-// Trace emits a record at LevelTrace, joining parts with a single space.
-// Terminal text output includes the call site for debug and trace records.
+// Trace emits a record at LevelTrace. Parts join with a space.
+// Terminal text adds the call site.
 func (d *Driver) Trace(attrs []slog.Attr, parts ...string) {
 	d.emit(LevelTrace, attrs, joinParts(parts))
 }
 
-// Tracef emits a record at LevelTrace using fmt.Sprintf formatting.
-// Terminal text output includes the call site for debug and trace records.
+// Tracef emits a record at LevelTrace, formatted by fmt.Sprintf.
+// Terminal text adds the call site.
 func (d *Driver) Tracef(attrs []slog.Attr, format string, args ...any) {
 	d.emit(LevelTrace, attrs, sprintfMessage(format, args))
 }
@@ -363,6 +446,34 @@ func Tracef(attrs []slog.Attr, format string, args ...any) {
 	Default().emit(LevelTrace, attrs, sprintfMessage(format, args))
 }
 
+// Attrs constructs a slice of slog.Attr from alternating keys and values.
+//
+// Keys that cannot be asserted as strings are replaced with a generic
+// identifier "invalid-key-%d" containing its argument index.
+//
+// Values are constructed with [slog.Any] for deriving the type, which provides
+// maximum support for types handled natively by [slog.Handler]s.
+//
+// If an odd number of arguments is provided, the final key is silently ignored.
+func Attrs(keyVals ...any) []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(keyVals)/2)
+	for i := 0; i < len(keyVals)-1; i += 2 {
+		key, ok := keyVals[i].(string)
+		if !ok {
+			key = fmt.Sprintf("invalid~key~[%d]", i)
+		}
+		attrs = append(attrs, slog.Any(key, keyVals[i+1]))
+	}
+	return attrs
+}
+
+// Group returns a grouped [slog.Attr] wrapped in a slice.
+// The group is constructed with the given key and the slice returned from
+// [Attrs] with the remaining arguments.
+func Group(key string, keyVals ...any) []slog.Attr {
+	return []slog.Attr{slog.GroupAttrs(key, Attrs(keyVals...)...)}
+}
+
 // joinParts returns a message builder that joins parts with a single space.
 // The builder is invoked lazily by emit only when a handler will receive the
 // record, avoiding the join cost for silenced records.
@@ -404,6 +515,15 @@ func (d *Driver) snapshotHandlers() []*Handler {
 	return raw.([]*Handler)
 }
 
+func (d *Driver) resetHandlers() bool {
+	if d == nil {
+		return false
+	}
+	count := len(d.snapshotHandlers())
+	d.handlers.Store([]*Handler{})
+	return count > 0
+}
+
 func (h *Handler) snapshotConfig() (handlerConfig, bool) {
 	if h == nil {
 		return handlerConfig{}, false
@@ -417,13 +537,13 @@ func (h *Handler) snapshotConfig() (handlerConfig, bool) {
 
 func (h *Handler) updateConfig(update func(handlerConfig) (handlerConfig, error)) error {
 	if h == nil {
-		return fmt.Errorf("log: nil handler")
+		return ErrNilHandler
 	}
 	h.configMu.Lock()
 	defer h.configMu.Unlock()
 	config, ok := h.snapshotConfig()
 	if !ok {
-		return fmt.Errorf("log: uninitialized handler")
+		return ErrZeroHandler
 	}
 	updated, err := update(config)
 	if err != nil {
@@ -431,6 +551,15 @@ func (h *Handler) updateConfig(update func(handlerConfig) (handlerConfig, error)
 	}
 	h.config.Store(updated)
 	return nil
+}
+
+func (h *Handler) isElementOf(handlers []*Handler) bool {
+	for _, handler := range handlers {
+		if h == handler {
+			return true
+		}
+	}
+	return false
 }
 
 func detectModuleRootPath() string {

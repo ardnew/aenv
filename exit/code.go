@@ -1,17 +1,11 @@
 package exit
 
-// Coder is implemented by types that can be used as exit codes.
-type Coder interface {
-	// ExitCode returns the process exit code or status.
-	ExitCode() int
-}
-
-// IsError returns true if c.ExitCode() returns a defined, non-zero exit code.
-func IsError(c Coder) bool { return c.ExitCode() > _min && c.ExitCode() < _max }
+// IsError reports whether code is a defined, non-zero exit code.
+func IsError(code int) bool { return code > _min && code < _max }
 
 // Exit codes are based on BSD sysexits.h.
 const (
-	// Successful exit status (EXIT_SUCCESS from <stdlib.h>).
+	// OK is successful termination.
 	OK = 0
 
 	// Error numbers begin at _ExitBase to reduce the possibility of clashing with
@@ -19,67 +13,49 @@ const (
 	// This is a bookkeeping detail and should not be used as an exit status.
 	_min = iota + 64
 
-	// The command was used incorrectly, e.g., with the wrong number of arguments,
-	// a bad flag, bad syntax in a parameter, or whatever.
+	// Usage indicates a command-line usage error.
 	Usage
 
-	// The input data was incorrect in some way. This should only be used for
-	// user's data and not system files.
+	// Data indicates incorrect input data.
 	Data
 
-	// An input file (not a system file) did not exist or was not readable. This
-	// could also include errors like "No message" to a mailer (if it cared to
-	// catch it).
+	// NoInput indicates a missing or unreadable input file.
 	NoInput
 
-	// The user specified did not exist. This might be used for mail addresses
-	// or remote logins.
+	// NoUser indicates an unknown user.
 	NoUser
 
-	// The host specified did not exist. This is used in mail addresses or
-	// network requests.
+	// NoHost indicates an unknown host.
 	NoHost
 
-	// A service is unavailable. This can occur if a support program or file
-	// does not exist. This can also be used as a catch-all message when
-	// something you wanted to do doesn't work, but you don't know why.
+	// Unavailable indicates an unavailable service.
 	Unavailable
 
-	// An internal software error has been detected. This should be limited
-	// to non-operating system related errors if possible.
+	// Software indicates an internal software error.
 	Software
 
-	// An operating system error has been detected. This is intended to be
-	// used for such things as "cannot fork", "cannot create pipe", or the
-	// like. It includes things like getuid(2) returning a user that does
-	// not exist in the passwd(5) file.
+	// OS indicates an operating system error.
 	OS
 
-	// Some system file (e.g., /etc/passwd, /etc/utmp, etc.)  does not exist,
-	// cannot be opened, or has some sort of error (e.g., syntax error).
+	// System indicates a system file error.
 	System
 
-	// A (user specified) output file cannot be created.
+	// Create indicates an output file cannot be created.
 	Create
 
-	// An error occurred while doing I/O on some file.
+	// IO indicates an input/output error.
 	IO
 
-	// Temporary failure, indicating something that is not really an error;
-	// e.g., a connection could not be created and should be retried later.
+	// Temporary indicates a transient failure; retry later.
 	Temporary
 
-	// The remote system returned something that was "not possible" during a
-	// protocol exchange.
+	// Protocol indicates a remote protocol error.
 	Protocol
 
-	// Insufficient permission to perform the operation.
-	//
-	// This is not intended for file system problems, which should use NoInput
-	// or Create, but rather for higher level permissions.
+	// Permission indicates insufficient permission.
 	Permission
 
-	// Something was found in an unconfigured or misconfigured state.
+	// Config indicates a configuration error.
 	Config
 
 	// The maximally defined exit status.

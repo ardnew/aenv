@@ -80,7 +80,7 @@ func ExampleSetDefault() {
 	// 12:34:56.789   attr.component=sync :: loaded config
 }
 
-func ExampleDriver_AddHandler() {
+func ExampleDriver_AddHandlers() {
 	restoreTime := useExampleTime()
 	defer restoreTime()
 
@@ -90,7 +90,7 @@ func ExampleDriver_AddHandler() {
 	if err != nil {
 		panic(err)
 	}
-	_, err = driver.AddHandler(HandlerOptions{Writer: &jsonOut, Format: FormatJSON, Level: LevelWarn})
+	err = driver.AddHandlers(HandlerOptions{Writer: &jsonOut, Format: FormatJSON, Level: LevelWarn})
 	if err != nil {
 		panic(err)
 	}
@@ -108,7 +108,7 @@ func ExampleDriver_AddHandler() {
 	// 12:34:56.789   attr.region=us-east-1 :: booted
 	// 12:34:56.789 - attr.region=us-east-1 :: disk almost full
 	// json:
-	// {"time":"2026-05-10T12:34:56.789+0200","level":"warn","source":"log/example_test.go:99","scope":"log.ExampleDriver_AddHandler","attr":{"region":"us-east-1"},"message":"disk almost full"}
+	// {"time":"2026-05-10T12:34:56.789+0200","level":"warn","source":"log/example_test.go:99","scope":"log.ExampleDriver_AddHandlers","attr":{"region":"us-east-1"},"message":"disk almost full"}
 }
 
 func ExampleHandler_SetLevel() {
@@ -120,15 +120,20 @@ func ExampleHandler_SetLevel() {
 	if err != nil {
 		panic(err)
 	}
-	handler, err := driver.AddHandler(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelWarn})
+	err = driver.AddHandlers(HandlerOptions{Writer: &out, Format: FormatText, Level: LevelWarn})
 	if err != nil {
 		panic(err)
 	}
 
 	driver.Info(nil, "hidden")
-	if err := handler.SetLevel(LevelInfo); err != nil {
+
+	err = driver.MapHandlers(IsEnabledHandler,
+		func(h *Handler) error { return h.SetLevel(LevelInfo) },
+	)
+	if err != nil {
 		panic(err)
 	}
+
 	driver.Info(nil, "visible", "now")
 	fmt.Print(out.String())
 

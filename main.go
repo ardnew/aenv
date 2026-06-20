@@ -3,23 +3,22 @@ package main
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"os"
+
+	"github.com/alecthomas/kong"
 
 	"github.com/ardnew/aenv/cli"
 	"github.com/ardnew/aenv/exit"
 	"github.com/ardnew/aenv/pkg"
 )
 
-// Version is the semantic version of the aenv module embedded at build time.
-// It is printed by the CLI when users invoke the version subcommand.
+// Version is the module's semantic version, embedded at build time.
 //
 //go:embed VERSION
 var Version string
 
-// License is the license of the aenv module embedded at build time.
-// It is printed by the CLI when users invoke the version subcommand.
+// License is the module's license text, embedded at build time.
 //
 //go:embed LICENSE
 var License string
@@ -33,9 +32,8 @@ func main() {
 	ctx := context.Background()
 	if err := cli.Run(ctx); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
-		var c exit.Coder
-		if errors.As(err, &c) {
-			os.Exit(c.ExitCode())
+		if err, ok := err.(kong.ExitCoder); ok {
+			os.Exit(err.ExitCode())
 		}
 		os.Exit(exit.Software)
 	}
