@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/ardnew/aenv/lang"
@@ -72,16 +73,11 @@ func inputLineCount(text string) int {
 	return strings.Count(text, "\n") + 1
 }
 
-func tailLines(text string, n int) string {
-	if n <= 0 || text == "" {
-		return ""
-	}
-	lines := strings.Split(text, "\n")
-	if len(lines) <= n {
-		return text
-	}
-	return strings.Join(lines[len(lines)-n:], "\n")
+func joinLines(value ...string) string {
+	return strings.ReplaceAll(strings.Join(value, " "), "\n", " ")
 }
+
+const maxOutputLines = 2048
 
 type repl struct {
 	app *tea.Program
@@ -93,26 +89,61 @@ type repl struct {
 
 	ast lang.AST
 
+	screen    viewport.Model
 	altScreen bool
 	altHeight int
-	output    []string
-	ready     bool
-	quitting  bool
-}
+	buffer    []string
 
-const maxOutputLines = 2048
+	quitting bool
+}
 
 func (l repl) appendOutput(text string) repl {
 	trimmed := strings.TrimRight(text, "\r\n")
 	if trimmed == "" {
-		l.output = append(l.output, "")
+		l.buffer = append(l.buffer, "")
 	} else {
-		l.output = append(l.output, strings.Split(trimmed, "\n")...)
+		l.buffer = append(l.buffer, strings.Split(trimmed, "\n")...)
 	}
-	if drop := len(l.output) - maxOutputLines; drop > 0 {
-		l.output = append([]string(nil), l.output[drop:]...)
+	if drop := len(l.buffer) - maxOutputLines; drop > 0 {
+		l.buffer = append([]string(nil), l.buffer[drop:]...)
+	}
+	atBottom := l.screen.AtBottom()
+	l.screen.SetContent(strings.Join(l.buffer, "\n"))
+	if atBottom {
+		l.screen.GotoBottom()
 	}
 	return l
+}
+
+func (l repl) syncViewportSize() repl {
+	if l.edit.bounds.X <= 0 || l.edit.bounds.Y <= 0 {
+		return l
+	}
+	editLines := max(1, inputLineCount(l.edit.View().Content))
+	height := max(0, l.edit.bounds.Y-editLines)
+	l.screen.SetWidth(l.edit.bounds.X)
+	l.screen.SetHeight(height)
+	return l
+}
+
+func (l repl) outputRegionView() string {
+	h := l.screen.Height()
+	if h <= 0 {
+		return ""
+	}
+
+	lines := []string{}
+	if content := l.screen.GetContent(); content != "" {
+		lines = strings.Split(content, "\n")
+	}
+
+	start := min(l.screen.YOffset(), len(lines))
+	end := min(start+h, len(lines))
+	visible := append([]string(nil), lines[start:end]...)
+	if pad := h - len(visible); pad > 0 {
+		visible = append(make([]string, pad), visible...)
+	}
+	return strings.Join(visible, "\n")
 }
 
 type keyMap struct {
@@ -179,12 +210,20 @@ var defaultKeyMap = sync.OnceValue(
 // overridden by any provided [option].
 func makeREPL(ctx context.Context, opts ...option[repl]) repl {
 	e := makeTextEdit()
+	v := viewport.New()
+	// Keep viewport scroll behavior on explicit navigation keys, but avoid
+	// intercepting plain text input that collides with default bindings.
+	v.KeyMap.PageDown = key.NewBinding(key.WithKeys("pgdown"))
+	v.KeyMap.PageUp = key.NewBinding(key.WithKeys("pgup"))
+	v.KeyMap.HalfPageDown.Unbind()
+	v.KeyMap.HalfPageUp.Unbind()
 
 	// Initialize with defaults then apply opts to override.
 	r := repl{
-		edit: e,
-		keys: defaultKeyMap(),
-		hist: loadHistory(pkg.CachePath(historyFile)),
+		edit:   e,
+		keys:   defaultKeyMap(),
+		hist:   loadHistory(pkg.CachePath(historyFile)),
+		screen: v,
 	}
 	return wrap(r, append(opts, withProgram(ctx))...)
 }
@@ -224,12 +263,12 @@ func (l repl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		l.altHeight = msg.Height - 1
-		l.ready = true
-		l.edit = l.edit.setSize(makeMaxBounds(msg.Width, msg.Height))
+		l.edit = l.edit.setSize(tea.Position{X: msg.Width, Y: msg.Height})
+		l = l.syncViewportSize()
 		log.Tracef(
-			log.Attrs("size", l.edit.size,
+			log.Attrs("size", l.edit.bounds,
 				slog.GroupAttrs(l.edit.mode.String(),
-					log.Attrs("dim", l.edit.activeDim())...,
+					log.Attrs("dim", l.edit.size())...,
 				),
 			),
 			"resize edit",
@@ -240,16 +279,19 @@ func (l repl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		log.Trace(msgAttr("color", msg.Color, "isDark", msg.IsDark()))
 		l.edit = l.edit.setBackgroundColor(msg.Color, msg.IsDark())
 
+	case tea.MouseWheelMsg:
+		if l.altScreen {
+			var cmd tea.Cmd
+			l.screen, cmd = l.screen.Update(msg)
+			batch = append(batch, cmd)
+		}
+
 	case readyMsg:
 		if l, err = l.onReady(); err != nil {
 			return l, fault(err)
 		}
-		l.ready = true
 
 	case logMsg:
-		if !l.ready {
-			return l, nil
-		}
 		s := fmt.Sprintf(msg.template, msg.args...)
 		if l.altScreen {
 			l = l.appendOutput(s)
@@ -336,6 +378,23 @@ func (l repl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		log.Trace(msgAttr("code", msg.Code, "text", msg.Text, "mod", msg.Mod))
 
 		switch {
+		case l.altScreen && msg.Mod == tea.ModCtrl && msg.Text == "u":
+			l.screen.HalfPageUp()
+			forwardText = false
+
+		case l.altScreen && msg.Mod == tea.ModCtrl && msg.Text == "d":
+			l.screen.HalfPageDown()
+			forwardText = false
+
+		case l.altScreen && (key.Matches(msg, l.screen.KeyMap.PageDown) ||
+			key.Matches(msg, l.screen.KeyMap.PageUp) ||
+			key.Matches(msg, l.screen.KeyMap.HalfPageDown) ||
+			key.Matches(msg, l.screen.KeyMap.HalfPageUp)):
+			var cmd tea.Cmd
+			l.screen, cmd = l.screen.Update(msg)
+			batch = append(batch, cmd)
+			forwardText = false
+
 		case key.Matches(msg, l.keys.eval):
 			log.Debug(msgAttr("action", "eval"))
 			return l, collect(l.edit.currentValue())
@@ -361,10 +420,7 @@ func (l repl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, l.keys.screen):
 			log.Debug(msgAttr("action", "toggle", "alt-screen", !l.altScreen))
 			l.altScreen = !l.altScreen
-			// l.edit = wrap(l.edit, withAltScreen(l.altScreen, l.altHeight))
-			// maxHeight := l.edit.size.y.max
-			// l.edit.SetMaxHeight(l.altHeight)
-			// l.altHeight = maxHeight
+			l = l.syncViewportSize()
 
 		case key.Matches(msg, l.keys.toggle) || (msg.Code == 'e' && msg.Mod == tea.ModAlt):
 			log.Debug(msgAttr("action", "toggle", "edit-mode", l.edit.mode))
@@ -402,6 +458,7 @@ func (l repl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		batch = append(batch, cmd)
 	}
+	l = l.syncViewportSize()
 	return l, tea.Batch(batch...)
 }
 
@@ -465,20 +522,16 @@ func (l repl) View() tea.View {
 	cursor := c
 	if l.altScreen {
 		editContent := l.edit.View().Content
-		editLines := max(1, inputLineCount(editContent))
-		keep := max(0, l.edit.size.y.max-editLines)
-		output := ""
-		if len(l.output) > 0 {
-			output = tailLines(strings.Join(l.output, "\n"), keep)
-		}
-		if output == "" {
-			v.SetContent(editContent)
-		} else {
+		l = l.syncViewportSize()
+		output := l.outputRegionView()
+		if output != "" {
 			v.SetContent(output + "\n" + editContent)
+		} else {
+			v.SetContent(editContent)
 		}
 		if c != nil {
 			shifted := *c
-			shifted.Y += inputLineCount(output)
+			shifted.Y += l.screen.Height()
 			cursor = &shifted
 		}
 	}

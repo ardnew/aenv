@@ -16,27 +16,23 @@ type (
 	AreaEdit struct{ textarea.Model }
 )
 
-func flatline(value ...string) string {
-	return strings.ReplaceAll(strings.Join(value, " "), "\n", " ")
-}
-
 type TextEdit struct {
 	mode editMode
 
-	size bounds[int]
+	bounds tea.Position // size of terminal
 
 	line LineEdit
 	area AreaEdit
 
-	value string
+	content string
 }
 
-func (e TextEdit) activeDim() tea.Position {
+func (e TextEdit) size() tea.Position {
 	switch e.mode {
 	case editLine:
-		return e.line.dim()
+		return e.line.size()
 	case editArea:
-		return e.area.dim()
+		return e.area.size()
 	}
 	return tea.Position{}
 }
@@ -44,17 +40,17 @@ func (e TextEdit) activeDim() tea.Position {
 func (e TextEdit) setFocus(mode editMode) TextEdit {
 	switch mode {
 	case editNone:
-		log.Tracef(log.Attrs("mode", mode, "value", e.value), "blur edit")
+		log.Tracef(log.Attrs("mode", mode), "blur edit")
 		e.line.Blur()
 		e.area.Blur()
 
 	case editLine:
-		log.Tracef(log.Attrs("mode", mode, "value", e.value), "focus edit")
+		log.Tracef(log.Attrs("mode", mode), "focus edit")
 		e.area.Blur()
 		_ = e.line.Focus()
 
 	case editArea:
-		log.Tracef(log.Attrs("mode", mode, "value", e.value), "focus edit")
+		log.Tracef(log.Attrs("mode", mode), "focus edit")
 		e.line.Blur()
 		_ = e.area.Focus()
 	}
@@ -62,37 +58,24 @@ func (e TextEdit) setFocus(mode editMode) TextEdit {
 }
 
 func (e TextEdit) reset() TextEdit {
-	log.Tracef(log.Attrs("mode", e.mode, "value", e.value), "reset edit")
+	log.Tracef(log.Attrs("mode", e.mode), "reset edit")
 	e.line.Reset()
 	e.area.Reset()
-	e.value = ""
+	e.content = ""
 	return e
 }
 
-func (e TextEdit) setSize(size bounds[int]) TextEdit {
-	e.size = size
-	e.line.SetWidth(size.x.max)
-	e.area.SetWidth(size.x.max)
+func (e TextEdit) setSize(size tea.Position) TextEdit {
+	e.bounds = size
+	e.line.SetWidth(size.X)
+	e.area.SetWidth(size.X)
 	e.area.MinHeight = 1
-	e.area.MaxHeight = min(e.area.MaxHeight, size.y.max)
+	e.area.MaxHeight = min(e.area.MaxHeight, size.Y)
 	return e
 }
 
 func (e TextEdit) setBackgroundColor(_ color.Color, isDark bool) TextEdit {
 	e.area.SetStyles(textarea.DefaultStyles(isDark))
-	return e
-}
-
-func (e TextEdit) snapshot(cb func(string)) TextEdit {
-	if cb == nil {
-		return e
-	}
-	switch e.mode {
-	case editLine:
-		cb(e.line.View().Content)
-	case editArea:
-		cb(e.area.View().Content)
-	}
 	return e
 }
 
@@ -110,7 +93,7 @@ func (e TextEdit) moveCursorEnd() TextEdit {
 			pos = c.Position
 		}
 	}
-	log.Tracef(log.Attrs("mode", e.mode, "value", e.value, "pos", pos), "move cursor to end")
+	log.Tracef(log.Attrs("mode", e.mode, "pos", pos), "move cursor to end")
 	return e
 }
 
@@ -128,10 +111,17 @@ func (e TextEdit) cursor(cb func(bool, *tea.Cursor)) TextEdit {
 }
 
 func (e TextEdit) setValue(value string) TextEdit {
-	log.Tracef(log.Attrs("mode", e.mode, "old", e.value, "new", value), "set value")
-	e.value = value
+	log.Tracef(
+		log.Attrs(
+			"mode", e.mode,
+			"bytes-old", len(e.content),
+			"bytes-new", len(value),
+		),
+		"set value",
+	)
+	e.content = value
 	e.area.SetValue(value)
-	e.line.SetValue(flatline(value))
+	e.line.SetValue(joinLines(value))
 	return e
 }
 
@@ -157,9 +147,9 @@ func nextEditMode(mode editMode) editMode {
 
 func makeTextEdit() TextEdit {
 	e := TextEdit{
-		line:  makeLineEdit(),
-		area:  makeAreaEdit(),
-		value: "",
+		line:    makeLineEdit(),
+		area:    makeAreaEdit(),
+		content: "",
 	}
 	e.mode = editArea
 	e = e.setFocus(editArea)
@@ -172,12 +162,12 @@ func makeLineEdit(value ...string) LineEdit {
 	mod.Placeholder = ""
 	mod.CharLimit = 0
 	mod.Prompt = ""
-	mod.SetValue(flatline(value...))
+	mod.SetValue(joinLines(value...))
 	mod.SetVirtualCursor(true)
 	return LineEdit{Model: mod}
 }
 
-func (e LineEdit) dim() tea.Position {
+func (e LineEdit) size() tea.Position {
 	return tea.Position{X: e.Width(), Y: 1}
 }
 
@@ -195,7 +185,7 @@ func makeAreaEdit(value ...string) AreaEdit {
 	return AreaEdit{Model: mod}
 }
 
-func (e AreaEdit) dim() tea.Position {
+func (e AreaEdit) size() tea.Position {
 	return tea.Position{X: e.Width(), Y: e.MaxHeight}
 }
 
@@ -206,7 +196,7 @@ func (e TextEdit) currentValue() string {
 	case editArea:
 		return e.area.Value()
 	}
-	return e.value
+	return e.content
 }
 
 func (e TextEdit) isLineMode() bool { return e.mode == editLine }
@@ -263,7 +253,7 @@ func (e TextEdit) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			e.area = *model
 		}
 	}
-	e.value = e.currentValue()
+	e.content = e.currentValue()
 	return e, cmd
 }
 

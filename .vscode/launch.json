@@ -14,7 +14,7 @@
       "program": "${workspaceFolder}",
       "args": [
         "eval",
-      ]
+      ],
     },
     {
       "name": ":debug eval",
@@ -26,6 +26,6 @@
       "port": 2345,
       "preLaunchTask": "!debug eval",
       "postDebugTask": "!debug clean",
-    }
+    },
   ]
 }

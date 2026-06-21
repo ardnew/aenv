@@ -62,6 +62,29 @@ func TestRepl_Update_HandlesSizeExtremes(t *testing.T) {
 	}
 }
 
+func TestRepl_Update_ResizeUpdatesViewportSize(t *testing.T) {
+	m := makeREPL(t.Context())
+	m.altScreen = true
+
+	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	if got := m.screen.Width(); got != 80 {
+		t.Fatalf("viewport width = %d, want %d", got, 80)
+	}
+	wantHeight := max(0, m.edit.bounds.Y-max(1, inputLineCount(m.edit.View().Content)))
+	if got := m.screen.Height(); got != wantHeight {
+		t.Fatalf("viewport height = %d, want %d", got, wantHeight)
+	}
+
+	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 101, Height: 31})
+	if got := m.screen.Width(); got != 101 {
+		t.Fatalf("viewport width after resize = %d, want %d", got, 101)
+	}
+	wantHeight = max(0, m.edit.bounds.Y-max(1, inputLineCount(m.edit.View().Content)))
+	if got := m.screen.Height(); got != wantHeight {
+		t.Fatalf("viewport height after resize = %d, want %d", got, wantHeight)
+	}
+}
+
 func evalKey() tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}
 }
@@ -157,7 +180,7 @@ func TestRepl_Update_LogMsgInAltScreenUsesProgramPrint(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("Update(logMsg in alt-screen) cmd != nil, want nil")
 	}
-	if got := strings.Join(m.output, "\n"); got != "trace line" {
+	if got := strings.Join(m.buffer, "\n"); got != "trace line" {
 		t.Fatalf("alt-screen output = %q, want %q", got, "trace line")
 	}
 }
@@ -168,7 +191,7 @@ func TestRepl_Update_CommitAndEvaluateInAltScreenBufferTranscript(t *testing.T) 
 	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 80, Height: 12})
 
 	m, cmd := applyMsg(t, m, commitMsg{text: "hello", view: "prompt"})
-	if got := strings.Join(m.output, "\n"); got != "prompt" {
+	if got := strings.Join(m.buffer, "\n"); got != "prompt" {
 		t.Fatalf("output after commit = %q, want %q", got, "prompt")
 	}
 	if cmd == nil {
@@ -179,11 +202,70 @@ func TestRepl_Update_CommitAndEvaluateInAltScreenBufferTranscript(t *testing.T) 
 	if cmd != nil {
 		t.Fatal("Update(evaluateMsg in alt-screen) cmd != nil, want nil when not quitting")
 	}
-	if got := strings.Join(m.output, "\n"); got != "prompt\nhello" {
+	if got := strings.Join(m.buffer, "\n"); got != "prompt\nhello" {
 		t.Fatalf("output after evaluate = %q, want %q", got, "prompt\\nhello")
 	}
 
 	if got := m.View().Content; !strings.Contains(got, "prompt") || !strings.Contains(got, "hello") {
 		t.Fatalf("View().Content = %q, want buffered transcript", got)
+	}
+}
+
+func TestRepl_View_AltScreenOutputAnchorsAboveEditor(t *testing.T) {
+	m := makeREPL(t.Context())
+	m.altScreen = true
+	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 40, Height: 8})
+	m, _ = applyMsg(t, m, makeLogMsg("%s", "trace line"))
+
+	view := m.View().Content
+	lines := strings.Split(view, "\n")
+	editLines := max(1, inputLineCount(m.edit.View().Content))
+	if len(lines) <= editLines {
+		t.Fatalf("View().Content has %d lines, want more than edit lines (%d): %q", len(lines), editLines, view)
+	}
+
+	editorStart := len(lines) - editLines
+	if got := lines[editorStart-1]; got != "trace line" {
+		t.Fatalf("line above editor = %q, want %q", got, "trace line")
+	}
+}
+
+func TestRepl_Update_AltScreenPlainDFUBTypeIntoEditor(t *testing.T) {
+	m := makeREPL(t.Context())
+	m.altScreen = true
+	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 40, Height: 8})
+	m = typeKey(t, m, 'd')
+	m = typeKey(t, m, 'f')
+	m = typeKey(t, m, 'u')
+	m = typeKey(t, m, 'b')
+
+	if got := m.edit.currentValue(); got != "dfub" {
+		t.Fatalf("edit value = %q, want %q", got, "dfub")
+	}
+}
+
+func TestRepl_Update_AltScreenViewportCtrlUDScroll(t *testing.T) {
+	m := makeREPL(t.Context())
+	m.altScreen = true
+	m, _ = applyMsg(t, m, tea.WindowSizeMsg{Width: 40, Height: 8})
+
+	for i := 0; i < 40; i++ {
+		m, _ = applyMsg(t, m, makeLogMsg("line-%02d", i))
+	}
+
+	baseline := m.screen.YOffset()
+	if baseline == 0 {
+		t.Fatal("expected non-zero initial viewport offset with long output")
+	}
+
+	m, _ = applyMsg(t, m, tea.KeyPressMsg{Code: 'u', Text: "u", Mod: tea.ModCtrl})
+	if got := m.screen.YOffset(); got >= baseline {
+		t.Fatalf("offset after ctrl+u = %d, want < %d", got, baseline)
+	}
+
+	afterU := m.screen.YOffset()
+	m, _ = applyMsg(t, m, tea.KeyPressMsg{Code: 'd', Text: "d", Mod: tea.ModCtrl})
+	if got := m.screen.YOffset(); got <= afterU {
+		t.Fatalf("offset after ctrl+d = %d, want > %d", got, afterU)
 	}
 }
