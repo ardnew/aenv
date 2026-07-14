@@ -10,4 +10,7 @@
 !go.sum
 !*.go
 
+!.zed/
+!.zed/*.json
+
 !*/

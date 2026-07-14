@@ -108,6 +108,7 @@ func (d *Driver) RemoveHandlers(handlers ...*Handler) bool {
 	if len(handlers) == 0 {
 		return d.resetHandlers()
 	}
+	Trace(Attrs("requested", len(handlers)), "driver remove handlers")
 	var found bool
 	var updated []*Handler
 	err := d.MapHandlers(
@@ -128,8 +129,10 @@ func (d *Driver) RemoveHandlers(handlers ...*Handler) bool {
 	}
 	if found {
 		d.handlers.Store(updated)
+		Trace(Attrs("remaining", len(updated)), "driver removed handlers")
 		return true
 	}
+	Trace(Attrs("remaining", len(updated)), "driver remove handlers no-op")
 	return false
 }
 
@@ -449,20 +452,23 @@ func Tracef(attrs []slog.Attr, format string, args ...any) {
 // Attrs constructs a slice of slog.Attr from alternating keys and values.
 //
 // Keys that cannot be asserted as strings are replaced with a generic
-// identifier "invalid-key-%d" containing its argument index.
+// identifier "{!key[%d]}" containing its argument index.
 //
 // Values are constructed with [slog.Any] for deriving the type, which provides
 // maximum support for types handled natively by [slog.Handler]s.
 //
 // If an odd number of arguments is provided, the final key is silently ignored.
+// Pairs with nil values are also sildently ignored.
 func Attrs(keyVals ...any) []slog.Attr {
 	attrs := make([]slog.Attr, 0, len(keyVals)/2)
 	for i := 0; i < len(keyVals)-1; i += 2 {
 		key, ok := keyVals[i].(string)
 		if !ok {
-			key = fmt.Sprintf("invalid~key~[%d]", i)
+			key = fmt.Sprintf("{!key[%d]}", i/2)
 		}
-		attrs = append(attrs, slog.Any(key, keyVals[i+1]))
+		if keyVals[i+1] != nil {
+			attrs = append(attrs, slog.Any(key, keyVals[i+1]))
+		}
 	}
 	return attrs
 }
@@ -521,6 +527,7 @@ func (d *Driver) resetHandlers() bool {
 	}
 	count := len(d.snapshotHandlers())
 	d.handlers.Store([]*Handler{})
+	Trace(Attrs("removed", count), "driver reset handlers")
 	return count > 0
 }
 

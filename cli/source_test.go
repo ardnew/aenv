@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ardnew/aenv/log"
+	"github.com/ardnew/aenv/pkg"
 )
 
 func TestLogOutputKey_NormalizesConsoleAndExpandsFiles(t *testing.T) {
@@ -34,6 +36,11 @@ func TestLogOutputKey_NormalizesConsoleAndExpandsFiles(t *testing.T) {
 
 type envReader struct {
 	got []string
+}
+
+func (e *envReader) Write(p []byte) (int, error) {
+	n, err := e.ReadFrom(bytes.NewReader(p))
+	return int(n), err
 }
 
 func (e *envReader) ReadFrom(r io.Reader) (int64, error) {
@@ -72,7 +79,7 @@ func TestSourcePaths_AppendsDiscoveredEntry(t *testing.T) {
 		filepath.Join(cwd, "a.aenv"),
 		filepath.Join(cwd, "b.aenv"),
 	}
-	automatic := filepath.Join(cwd, ".aenv")
+	automatic := filepath.Join(cwd, "."+pkg.Name+"rc")
 
 	touch(append(explicit, automatic)...)
 
@@ -97,6 +104,10 @@ func TestSourcePaths_AppendsDiscoveredEntry(t *testing.T) {
 }
 
 type discardReader struct{}
+
+func (d discardReader) Write(p []byte) (int, error) {
+	return io.Discard.Write(p)
+}
 
 func (d discardReader) ReadFrom(r io.Reader) (int64, error) {
 	return io.Copy(io.Discard, r)
@@ -125,6 +136,7 @@ func TestWithSources_LogsOnePerSource(t *testing.T) {
 	}
 
 	out := buf.String()
+	out = strings.ReplaceAll(out, "\r\n", "\n")
 	if got := strings.Count(out, ":: read source\n"); got != 2 {
 		t.Fatalf("withSources emitted %d read-source records, want 2:\n%s", got, out)
 	}

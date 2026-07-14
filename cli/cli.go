@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -100,16 +101,8 @@ func (s sourceDef) attrs() []slog.Attr {
 	return attrs
 }
 
-// yieldFrom is a helper that logs and opens a source file for reading
-// by passing an [io.Reader] to the provided function.
-//
-// It guarantees that the file is closed after the function returns,
-// so the caller can read as much as they want without cleaning up.
-//
-// It is called for each explicitly provided source, or, if no sources were
-// provided, it is called once with the first discovered via [pkg.EntryPath].
-
-func (s sourceDef) WriteTo(w io.ReaderFrom) (int64, error) {
+// WriteTo implements the [io.WriterTo] interface on [sourceDef].
+func (s sourceDef) WriteTo(w io.Writer) (int64, error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		return 0, wrapPathError(err)
@@ -121,10 +114,10 @@ func (s sourceDef) WriteTo(w io.ReaderFrom) (int64, error) {
 		}
 	}()
 	log.Trace(s.attrs(), "read source")
-	return w.ReadFrom(f)
+	return bufio.NewReader(f).WriteTo(w) // ensure buffered reading
 }
 
-func withSources(source []string, dst io.ReaderFrom) error {
+func withSources(source []string, w io.Writer) error {
 
 	count := len(source)
 	if count > 0 {
@@ -132,7 +125,7 @@ func withSources(source []string, dst io.ReaderFrom) error {
 	}
 
 	for i, src := range source {
-		_, err := makeExplicitSource(src, i+1, count).WriteTo(dst)
+		_, err := makeExplicitSource(src, i+1, count).WriteTo(w)
 		if err != nil {
 			return err
 		}
@@ -144,7 +137,7 @@ func withSources(source []string, dst io.ReaderFrom) error {
 		if !ok {
 			return withExitCode(nil, exit.NoInput)
 		}
-		_, err := makeDiscoveredSource(str).WriteTo(dst)
+		_, err := makeDiscoveredSource(str).WriteTo(w)
 		if err != nil {
 			return err
 		}

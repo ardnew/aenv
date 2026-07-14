@@ -4,27 +4,23 @@
 
   "go.buildFlags": [
     "-v",
-    // "-tags=pprof",
-    // "-gcflags=-N -l"
   ],
   "go.toolsEnvVars": {
     "TMPDIR": "",
-    "GOEXPERIMENT": "goroutineleakprofile",
+    "GOEXPERIMENT": "jsonv2",
   },
 
   "go.testFlags": [
     "-count=1",
-    // "-v",
-    // "-tags=pprof",
   ],
   "go.testEnvVars": {
     "TMPDIR": "",
-    "GOEXPERIMENT": "goroutineleakprofile",
+    "GOEXPERIMENT": "jsonv2",
   },
 
   "go.diagnostic.vulncheck": "Imports",
 
-  "go.lintTool": "golangci-lint",
+  "go.lintTool": "golangci-lint-v2",
   "go.lintOnSave": "workspace",
   "go.lintFlags": [
     "run",
@@ -45,12 +41,11 @@
 
   "gopls": {
     "build.buildFlags": [
-      // "-tags=pprof",
-      // "-gcflags=-N -l"
+      "-v",
     ],
     "build.env": {
       "TMPDIR": "",
-      "GOEXPERIMENT": "goroutineleakprofile",
+      "GOEXPERIMENT": "jsonv2",
     },
     "formatting.local": "github.com/ardnew/aenv",
     "ui.codelenses": {

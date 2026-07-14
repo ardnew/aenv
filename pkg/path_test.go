@@ -8,7 +8,7 @@ import (
 )
 
 func TestProjectFile(t *testing.T) {
-	if want := "." + Name; localEntryFile != want {
+	if want := "." + Name + "rc"; localEntryFile != want {
 		t.Errorf("ProjectFile = %q, want %q", localEntryFile, want)
 	}
 }

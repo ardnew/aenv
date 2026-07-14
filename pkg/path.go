@@ -32,8 +32,8 @@ func EntryPath() (string, bool) {
 }
 
 const (
-	localEntryFile  = "." + Name  // file name during CWD traversal
-	globalEntryFile = Name + "rc" // file name in XDG config directories
+	localEntryFile  = "." + Name + "rc" // file name during CWD traversal
+	globalEntryFile = Name + "rc"       // file name in XDG config directories
 )
 
 // rootPrefix returns the physical root prefix of the system and a logical root

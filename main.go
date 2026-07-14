@@ -37,4 +37,5 @@ func main() {
 		}
 		os.Exit(exit.Software)
 	}
+	os.Exit(0)
 }

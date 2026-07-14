@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"io"
 	"slices"
 
 	"github.com/ardnew/aenv/exit"
@@ -38,10 +37,10 @@ func (e Eval) Run(ctx context.Context) error {
 	})
 }
 
-func (e *Eval) ReadFrom(r io.Reader) (int64, error) {
-	nb, err := e.ast.ReadFrom(r)
+func (e *Eval) Write(b []byte) (int, error) {
+	nb, err := e.ast.Write(b)
 	if err != nil {
-		log.Debug(log.Attrs("error", err), "command parse")
+		log.Debug(log.Attrs("error", err))
 		return nb, withExitCode(err, exit.Data)
 	}
 	return nb, nil

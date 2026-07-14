@@ -18,12 +18,12 @@ type ParseError struct {
 	srcContext string
 }
 
-func MakeParseError(err error, pos Pos, r io.Reader) error {
+func ContextualParseError(err error, pos Pos, r io.Reader) error {
 	scan := bufio.NewScanner(r)
 	scan.Split(bufio.ScanLines)
 
-	var iLine int
-	for ; iLine < pos.line && scan.Scan(); iLine++ {
+	var iLine int64
+	for ; iLine < pos.Line && scan.Scan(); iLine++ {
 	}
 
 	if serr := scan.Err(); serr != nil {
@@ -36,13 +36,9 @@ func MakeParseError(err error, pos Pos, r io.Reader) error {
 	}
 
 	line := scan.Text()
-	if pos.column-1 > len(line) {
+	if pos.Column-1 > int64(len(line)) {
 		const m = `failed to index source line for error reporting`
-		log.Error(log.Attrs(
-			"parse-error", err,
-			"source-line", line,
-			"column-index", pos.column,
-		), m)
+		log.Error(log.Attrs("error", err, "pos", pos), m)
 		panic(fmt.Errorf("%w: "+m, err))
 	}
 
@@ -54,8 +50,7 @@ func MakeParseError(err error, pos Pos, r io.Reader) error {
 }
 
 func (e *ParseError) Error() string {
-	return fmt.Sprintf("%s at line %d, column %d",
-		e.Err.Error(), e.Pos.line, e.Pos.column)
+	return fmt.Sprintf("%s at %s", e.Err.Error(), e.Pos.String())
 }
 
 func (e *ParseError) Unwrap() error {
@@ -66,29 +61,29 @@ func (e *ParseError) Snippet() string {
 	return e.srcContext
 }
 
-func buildContext(line string, pos Pos, width int) string {
+func buildContext(line string, pos Pos, width int64) string {
 	// Capture a span of the line around the error position, with a fixed width.
 	var span = struct {
-		beg, end           int
+		beg, end           int64
 		truncBeg, truncEnd bool
 	}{
-		beg: pos.column - 1 - (width / 2),
-		end: pos.column - 1 + (width / 2),
+		beg: pos.Column - 1 - (width / 2),
+		end: pos.Column - 1 + (width / 2),
 	}
 	if span.beg < 0 {
 		span.end += -span.beg
 		span.beg = 0
 	}
-	if span.end > len(line) {
-		span.beg -= span.end - len(line)
-		span.end = len(line)
+	if span.end > int64(len(line)) {
+		span.beg -= span.end - int64(len(line))
+		span.end = int64(len(line))
 		if span.beg < 0 {
 			span.beg = 0
 		}
 	}
 
 	span.truncBeg = span.beg > 0
-	span.truncEnd = span.end < len(line)
+	span.truncEnd = span.end < int64(len(line))
 
 	// Convert to rune slice for simpler editing.
 	runes := []rune(line)
@@ -107,7 +102,7 @@ func buildContext(line string, pos Pos, width int) string {
 
 	// Add a marker line with an arrow pointing to the error column.
 	for i := span.beg; i < span.end; i++ {
-		if i == pos.column-1 {
+		if i == pos.Column-1 {
 			sb.WriteRune('↑')
 		} else {
 			sb.WriteByte(' ')

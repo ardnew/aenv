@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,10 @@ func useExampleTime() func() {
 	}
 }
 
+func exampleOutput(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
+
 func ExampleNew() {
 	restoreTime := useExampleTime()
 	defer restoreTime()
@@ -36,7 +41,7 @@ func ExampleNew() {
 	}
 
 	driver.Info([]slog.Attr{slog.String("scope", "cli")}, "starting", "up")
-	fmt.Print(out.String())
+	fmt.Print(exampleOutput(out.String()))
 
 	// Output:
 	// 12:34:56.789   attr.scope=cli :: starting up
@@ -53,7 +58,7 @@ func ExampleDriver_Logf() {
 	}
 
 	driver.Logf(LevelWarn, []slog.Attr{slog.Int("retry", 2)}, "attempt %d failed", 3)
-	fmt.Print(out.String())
+	fmt.Print(exampleOutput(out.String()))
 
 	// Output:
 	// 12:34:56.789 - attr.retry=2 :: attempt 3 failed
@@ -74,7 +79,7 @@ func ExampleSetDefault() {
 	SetDefault(driver)
 
 	Info([]slog.Attr{slog.String("component", "sync")}, "loaded", "config")
-	fmt.Print(out.String())
+	fmt.Print(exampleOutput(out.String()))
 
 	// Output:
 	// 12:34:56.789   attr.component=sync :: loaded config
@@ -99,7 +104,7 @@ func ExampleDriver_AddHandlers() {
 	driver.Warn([]slog.Attr{slog.String("region", "us-east-1")}, "disk", "almost", "full")
 
 	fmt.Println("text:")
-	fmt.Print(textOut.String())
+	fmt.Print(exampleOutput(textOut.String()))
 	fmt.Println("json:")
 	fmt.Print(jsonOut.String())
 
@@ -108,7 +113,7 @@ func ExampleDriver_AddHandlers() {
 	// 12:34:56.789   attr.region=us-east-1 :: booted
 	// 12:34:56.789 - attr.region=us-east-1 :: disk almost full
 	// json:
-	// {"time":"2026-05-10T12:34:56.789+0200","level":"warn","source":"log/example_test.go:99","scope":"log.ExampleDriver_AddHandlers","attr":{"region":"us-east-1"},"message":"disk almost full"}
+	// {"time":"2026-05-10T12:34:56.789+0200","level":"warn","source":"log/example_test.go:104","scope":"log.ExampleDriver_AddHandlers","attr":{"region":"us-east-1"},"message":"disk almost full"}
 }
 
 func ExampleHandler_SetLevel() {
@@ -135,7 +140,7 @@ func ExampleHandler_SetLevel() {
 	}
 
 	driver.Info(nil, "visible", "now")
-	fmt.Print(out.String())
+	fmt.Print(exampleOutput(out.String()))
 
 	// Output:
 	// 12:34:56.789   visible now

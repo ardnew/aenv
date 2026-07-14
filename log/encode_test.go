@@ -69,7 +69,7 @@ func TestEncodeTextEvent_NamespacesUserAttrs(t *testing.T) {
 	}
 
 	got := string(encodeTextEvent(targetTerminal, LevelDebug, record))
-	want := "12:34:56.789 · source=encode_test.go:1 scope=log.TestEncodeTextEvent_NamespacesUserAttrs attr.ctx.id=7 attr.scope=user-scope attr.ctx.id=literal :: hello\n"
+	want := "12:34:56.789 · source=encode_test.go:1 scope=log.TestEncodeTextEvent_NamespacesUserAttrs attr.ctx.id=7 attr.scope=user-scope attr.ctx.id=literal :: hello\r\n"
 	if got != want {
 		t.Fatalf("encodeTextEvent() mismatch\nwant: %q\ngot:  %q", want, got)
 	}

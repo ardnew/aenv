@@ -1,8 +1,6 @@
 {
   "recommendations": [
     "editorconfig.editorconfig",
-    "davidanson.vscode-markdownlint",
     "golang.go",
-		"dunstontc.vscode-go-syntax",
   ]
 }

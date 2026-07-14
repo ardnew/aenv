@@ -149,7 +149,7 @@ func TestDriver_Log_TerminalTextLayout(t *testing.T) {
 	driver.Debug([]slog.Attr{slog.String("scope", "unit")}, "hello", "world")
 
 	want := fmt.Sprintf(
-		"%s · %s attr.scope=unit :: hello world\n",
+		"%s · %s attr.scope=unit :: hello world\r\n",
 		fixedTestTime.Format(shortTimestampLayout),
 		site.terminalText(),
 	)
@@ -170,7 +170,7 @@ func TestDriver_Log_TerminalJSONLayout(t *testing.T) {
 	driver.Info([]slog.Attr{slog.Bool("ok", true)}, "hello", "world")
 
 	want := fmt.Sprintf(
-		"{\"time\":\"%s\",\"level\":\"info\",%s,\"attr\":{\"ok\":true},\"message\":\"hello world\"}\n",
+		"{\"time\":\"%s\",\"level\":\"info\",%s,\"attr\":{\"ok\":true},\"message\":\"hello world\"}\r\n",
 		fixedTestTime.Format(shortTimestampLayout),
 		site.json(),
 	)
@@ -210,7 +210,7 @@ func TestDriver_Log_EmptyMessageOmitsSeparator(t *testing.T) {
 
 	driver.Info(nil)
 
-	want := fmt.Sprintf("%s  \n", fixedTestTime.Format(shortTimestampLayout))
+	want := fmt.Sprintf("%s  \r\n", fixedTestTime.Format(shortTimestampLayout))
 	if got := out.String(); got != want {
 		t.Fatalf("Empty message mismatch\nwant: %q\ngot:  %q", want, got)
 	}
@@ -265,7 +265,7 @@ func TestDriver_Log_MultiHandlerFanout(t *testing.T) {
 		fixedTestTime.Format(longTimestampLayout),
 		site.json(),
 	)
-	wantTerm := fmt.Sprintf("%s   attr.scope=fanout :: hello\n", fixedTestTime.Format(shortTimestampLayout))
+	wantTerm := fmt.Sprintf("%s   attr.scope=fanout :: hello\r\n", fixedTestTime.Format(shortTimestampLayout))
 
 	if got := textOut.String(); got != wantText {
 		t.Fatalf("text handler mismatch\nwant: %q\ngot:  %q", wantText, got)

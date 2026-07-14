@@ -275,7 +275,7 @@ func encodeTextEvent(target outputTarget, handlerLevel Level, record eventRecord
 		}
 		buf.WriteString(record.message)
 	}
-	buf.WriteByte('\n')
+	buf.WriteString("\r\n")
 	return buf.Bytes()
 }
 
@@ -382,6 +382,10 @@ func encodeJSONEvent(target outputTarget, record eventRecord) []byte {
 		appendJSONAttrGroupField(&buf, &first, userAttrsKey, record.attrs)
 	}
 	appendJSONField(&buf, &first, "message", record.message)
+	if target == targetTerminal {
+		buf.WriteString("}\r\n")
+		return buf.Bytes()
+	}
 	buf.WriteString("}\n")
 	return buf.Bytes()
 }

@@ -1,61 +1,73 @@
+//go:build goexperiment.jsonv2
+
 package lang
 
 import (
-	"bufio"
-	"fmt"
+	"bytes"
+	"encoding/json/v2"
 	"io"
+	"unicode/utf8"
 
 	"github.com/ardnew/aenv/log"
 )
 
+type Buffer []byte
+
+func (b Buffer) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(b))
+}
+
 // AST represents the abstract syntax tree of a source.
 type AST struct {
-	pos Pos
+	B   Buffer `json:"src"`
+	Pos Pos    `json:"pos"`
 }
 
-// ReadFrom parses from the provided reader and appends the AST to the receiver.
-func (a *AST) ReadFrom(r io.Reader) (int64, error) {
-	log.Trace(nil, "parse")
-	s := bufio.NewScanner(r)
-	s.Split(bufio.ScanBytes)
-	var count int64
+func (a *AST) Write(b []byte) (int, error) {
+	log.Trace(log.Attrs("pos", a.Pos, "len", len(b)))
 
-	for s.Scan() {
-		count += int64(len(s.Bytes()))
+	// a.scan(b)
+	a.B = make([]byte, len(b))
+	copy(a.B, b)
+	log.Debug(log.Attrs("pos", a.Pos))
+	return len(b), nil
+}
+
+// parse reads source from r and appends its position state to the AST.
+func (a *AST) parse(r io.Reader) (int64, error) {
+	log.Trace(log.Attrs("pos", a.Pos))
+	b, err := io.ReadAll(r)
+	n := a.scan(b)
+	log.Debug(log.Attrs("pos", a.Pos, "error", err))
+	return n, err
+}
+
+func (a *AST) scan(b []byte) int64 {
+	n := int64(len(b))
+	a.B = append(a.B, b...)
+	if n != 0 {
+		if a.Pos.Line == 0 {
+			a.Pos.Line = 1
+		}
+		if a.Pos.Column == 0 {    
+			a.Pos.Column = 1
+		}
+		a.Pos.Offset += n
+		if lastLine := bytes.LastIndexByte(b, '\n'); lastLine >= 0 {
+			a.Pos.Line += int64(bytes.Count(b, []byte{'\n'}))
+			a.Pos.Column = int64(utf8.RuneCount(b[lastLine+1:])) + 1
+		} else {
+			a.Pos.Column += int64(utf8.RuneCount(b))
+		}
 	}
+	return n
+}
 
-	err := s.Err()
-	attrs := log.Attrs("bytes", count)
+func (a *AST) String() string {
+	b, err := json.Marshal(a)
 	if err != nil {
-		log.Debug(append(attrs, log.Attrs("error", err)...), "parse")
-		return count, err
+		log.Error(log.Attrs("error", err))
+		return ""
 	}
-	log.Debug(attrs, "parse")
-	return count, nil
-}
-
-// Pos returns the position of the most recently parsed token in the AST.
-func (a *AST) Pos() Pos { return a.pos }
-
-// Pos refers to an absolute position in a byte stream in terms of byte offset
-// and line:column, relative to the start of the stream.
-//
-// The offset is 0-based, while the line and column are 1-based.
-// The first byte in a stream will be at offset=0 and line=column=1.
-// This is distinguished from the zero value, which is an invalid position.
-type Pos struct {
-	offset, line, column int
-}
-
-// IsZero returns whether the position is the invalid zero value.
-//
-// The first byte in a stream will be at offset=0 and line=column=1.
-func (p Pos) IsZero() bool {
-	return p.offset == 0 && p.line == 0 && p.column == 0
-}
-
-// String returns a human-readable position string, e.g. "3:15+42",
-// meaning line 3, column 15. The +42 byte offset refers to the same position.
-func (p Pos) String() string {
-	return fmt.Sprintf("%d:%d+%d", p.line, p.column, p.offset)
+	return string(b)
 }

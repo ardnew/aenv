@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"io"
 	"slices"
 
 	"github.com/ardnew/aenv/exit"
@@ -45,10 +44,10 @@ func (n Namespace) Run() error {
 	})
 }
 
-func (n *Namespace) ReadFrom(r io.Reader) (int64, error) {
-	nb, err := n.ast.ReadFrom(r)
+func (n *Namespace) Write(b []byte) (int, error) {
+	nb, err := n.ast.Write(b)
 	if err != nil {
-		log.Debug(log.Attrs("error", err), "command parse")
+		log.Debug(log.Attrs("error", err))
 		return nb, withExitCode(err, exit.Data)
 	}
 	return nb, nil
