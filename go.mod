@@ -15,7 +15,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/expr-lang/expr v1.17.8
 	github.com/goccy/go-yaml v1.19.2
-	github.com/mattn/go-isatty v0.0.20
+	github.com/mattn/go-isatty v0.0.22
 	github.com/pkg/profile v1.7.0
 	github.com/sahilm/fuzzy v0.1.1
 )
