@@ -1,4 +1,2 @@
-// Package cli implements the command-line interface for aenv.
-//
-// Run parses the command line and dispatches a subcommand.
+// Package cli provides the application's read-evaluate-print loop.
 package cli

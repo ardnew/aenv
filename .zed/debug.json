@@ -1,20 +1,52 @@
 [
-  {
-    "label": "run eval",
-    "adapter": "Delve",
-    "request": "launch",
-    "mode": "debug",
-    "program": "$ZED_WORKTREE_ROOT",
-    "cwd": "$ZED_WORKTREE_ROOT",
-    "args": ["eval"]
-  },
-  {
-    "label": "debug eval",
-    "adapter": "Delve",
-    "request": "launch",
-    "mode": "debug",
-    "program": "$ZED_WORKTREE_ROOT",
-    "cwd": "$ZED_WORKTREE_ROOT",
-    "args": ["eval", "-vvv"]
-  }
+	{
+		"label": "run eval",
+
+		"adapter": "Delve",
+		"request": "launch",
+		"mode": "debug",
+
+		"program": "$ZED_WORKTREE_ROOT",
+		"args": ["eval"],
+		"cwd": "$ZED_WORKTREE_ROOT",
+		"env": {
+			"GOEXPERIMENT": "jsonv2",
+			"TMPDIR": ""
+		},
+
+		"console": "internalConsole",
+		"hideSystemGoroutines": true,
+		"showGlobalVariables": true,
+		"showLog": false,
+		"showRegisters": true,
+		"stackTraceDepth": 50,
+		"stopOnEntry": false,
+		"trace": "info",
+		"traceDirPath": "$ZED_WORKTREE_ROOT/.zed/debug"
+	},
+	{
+		"label": "debug eval",
+
+		"adapter": "Delve",
+		"request": "launch",
+		"mode": "debug",
+
+		"program": "$ZED_WORKTREE_ROOT",
+		"args": ["eval", "-vvv"],
+		"cwd": "$ZED_WORKTREE_ROOT",
+		"env": {
+			"GOEXPERIMENT": "jsonv2",
+			"TMPDIR": ""
+		},
+
+		"console": "internalConsole",
+		"hideSystemGoroutines": true,
+		"showGlobalVariables": true,
+		"showLog": false,
+		"showRegisters": true,
+		"stackTraceDepth": 50,
+		"stopOnEntry": false,
+		"trace": "info",
+		"traceDirPath": "$ZED_WORKTREE_ROOT/.zed/debug"
+	}
 ]

@@ -1,11 +1,21 @@
 [
-  {
-    "label": "build",
-    "command": "go",
-    "args": ["build", "-v"],
-    "cwd": "$ZED_WORKTREE_ROOT",
-    "use_new_terminal": false,
-    "allow_concurrent_runs": false,
-    "reveal": "always"
-  }
+	{
+		"label": "build",
+
+		"command": "go",
+		"args": ["build", "-v"],
+		"cwd": "$ZED_WORKTREE_ROOT",
+		"env": {
+			"GOEXPERIMENT": "jsonv2",
+			"TMPDIR": ""
+		},
+
+		"reveal": "always",
+		"reveal_target": "dock",
+		"save": "all",
+		"hide": "on_success",
+		"show_command": true,
+		"use_new_terminal": false,
+		"allow_concurrent_runs": false
+	}
 ]
